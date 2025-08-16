@@ -1,279 +1,341 @@
+// index.js
+// --- Bot Web Server for alerts ---
+// Endpoints: /health, /debug, /test/telegram, /simulate-error, /webhook/apify
+
 import express from "express";
 import axios from "axios";
+import crypto from "crypto";
+import bodyParser from "body-parser";
 
-// ------------ ENV ------------
+// ----------- ENV -----------
 const PORT = process.env.PORT || 8080;
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID; // יעד ברירת מחדל להתראות
-const TELEGRAM_ALLOWED_CHAT_IDS = (process.env.TELEGRAM_ALLOWED_CHAT_IDS || "")
-  .split(",").map(s => s.trim()).filter(Boolean); // מי רשאי לשלוח פקודות
 
-const APIFY_WEBHOOK_SECRET = process.env.APIFY_WEBHOOK_SECRET || ""; // לאימות webhook
-const KEYWORDS = (process.env.KEYWORDS || "").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
+const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// סף “אותה מילה ב-N חשבונות” (אם לא עובדים עם זה, אפשר להשאיר ברירת מחדל)
-const WINDOW_SEC = Number(process.env.WINDOW_SEC || 300);
+const KEYWORDS = (process.env.KEYWORDS || "tariff,tariffs,breaking,fed,fomc")
+  .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+
+const APIFY_WEBHOOK_SECRET = process.env.APIFY_WEBHOOK_SECRET || ""; // מומלץ להגדיר
+
+const WINDOW_SEC          = Number(process.env.WINDOW_SEC || 300); // חלון זמן לצבירה (ברירת מחדל 5 דק')
 const MIN_UNIQUE_ACCOUNTS = Number(process.env.MIN_UNIQUE_ACCOUNTS || 2);
-const MAX_ITEMS_FETCH = Number(process.env.MAX_ITEMS_FETCH || 50);
+const MAX_ITEMS_FETCH     = Number(process.env.MAX_ITEMS_FETCH || 50); // תקרת פריטים לעיבוד בבקשה
 
-// ------------ STATE & ERROR CODES ------------
-/**
- * קודי שגיאה מקוצרים שנחזיר ב-/diag וב-/status:
- * T01 – חסר TELEGRAM env
- * T02 – שליחת טלגרם נכשלה
- * W01 – קריאת webhook נדחתה (secret לא תואם)
- * W02 – webhook נקלט בלי dataset id תקין
- * A01 – כשל בקריאת dataset מ-Apify (אם משתמשים)
- * F01 – לא נמצאו התאמות מילות מפתח (מידע/Info, לא בהכרח תקלה)
- * S01 – כשל פנימי לא מטופל
- */
-const ERROR_CODES = {
-  TELEGRAM_ENV_MISSING: "T01",
-  TELEGRAM_SEND_FAILED: "T02",
-  WEBHOOK_REJECTED: "W01",
-  WEBHOOK_NO_DATASET: "W02",
-  APIFY_DATASET_FAIL: "A01",
-  NO_KEYWORD_MATCH: "F01",
-  INTERNAL_ERROR: "S01",
-};
-
-let lastError = null; // { code, at, detail }
-let lastWebhookAt = null;
-let lastOkAt = null;
-let lastDiag = null; // נשמור תוצאת בדיקה אחרונה
-let processStart = Date.now();
-
-// זיכרון לצבירת הופעות מילים בחלון הזמן
-// map: keyword -> map(accountId => timestamp)
-const keywordWindow = new Map();
-
-// ------------ HELPERS ------------
-function setLastError(code, detail) {
-  lastError = { code, at: new Date().toISOString(), detail };
-  console.error("❌", code, detail || "");
+// ----------- Validation of basic env -----------
+if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
+  console.error("❌ חסרים משתני סביבה: TELEGRAM_TOKEN / TELEGRAM_CHAT_ID");
+}
+if (!KEYWORDS.length) {
+  console.warn("⚠️ KEYWORDS ריק — מומלץ להגדיר מילות מפתח רלוונטיות");
 }
 
-function setLastOk(note) {
-  lastOkAt = new Date().toISOString();
-  if (note) console.log("✅", note);
-}
+// ----------- App init -----------
+const app = express();
 
-async function sendTelegram({ chatId = TELEGRAM_CHAT_ID, text, html=false }) {
-  if (!TELEGRAM_TOKEN || !chatId) {
-    setLastError(ERROR_CODES.TELEGRAM_ENV_MISSING, "Missing TELEGRAM_TOKEN or chat id");
-    return { ok: false, code: ERROR_CODES.TELEGRAM_ENV_MISSING };
+// חשוב: כדי לוודא אימות חתימה, צריך לקבל את ה-raw body.
+// נשתמש גם ב-raw וגם ב-json, כדי לאפשר אימות חתימה ולגשת ל-req.body אחרי זה.
+app.use(
+  "/webhook/apify",
+  bodyParser.raw({ type: "*/*", limit: "2mb" }) // raw עבור אימות חתימה
+);
+
+// לשאר הראוטים JSON רגיל
+app.use(bodyParser.json({ limit: "2mb" }));
+
+// ----------- State / Cache -----------
+// זיכרון חולף לצבירת מופעים בחלון הזמן.
+// מבנה: { keyword -> { accounts: Set<string>, firstAt: number, lastAt: number, samples: Array<item> } }
+const windowStore = new Map();
+// דה-דופליקציה כללית לזמן החלון: שמירת מזהי פריטים שכבר טופלו
+const seenIds = new Set();
+
+// ניקוי זיכרון מדי פעם
+setInterval(() => {
+  const now = Date.now();
+  let removed = 0;
+  // מחיקת ids ישנים
+  for (const id of seenIds) {
+    // אין לנו timestamps ל-id ב-Set, אז נשמור בינארי קטן בתוך windowStore בלבד
+    // לכן כאן לא מנקים seenIds, כדי לא להדליף כפילויות; אם רוצים מחיקה אגרסיבית, אפשר לאפס כל N דקות.
   }
-  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-  const body = {
-    chat_id: chatId,
-    [html ? "parse_mode" : "disable_web_page_preview"]: html ? "HTML" : true,
-    text,
-    ...(html ? { parse_mode: "HTML", disable_web_page_preview: true } : {})
-  };
-  try {
-    const res = await axios.post(url, body, { timeout: 15000 });
-    return { ok: true, result: res.data };
-  } catch (err) {
-    setLastError(ERROR_CODES.TELEGRAM_SEND_FAILED, err?.response?.data || err.message);
-    return { ok: false, code: ERROR_CODES.TELEGRAM_SEND_FAILED, err: err?.response?.data || err.message };
-  }
-}
-
-function withinWindowPurge() {
-  const cutoff = Date.now() - WINDOW_SEC * 1000;
-  for (const [kw, mapAcc] of keywordWindow) {
-    for (const [acc, ts] of mapAcc) {
-      if (ts < cutoff) mapAcc.delete(acc);
+  // מחיקת אירועים שיצאו מחלון הזמן
+  for (const [kw, obj] of windowStore.entries()) {
+    if (now - obj.lastAt > WINDOW_SEC * 1000) {
+      windowStore.delete(kw);
+      removed++;
     }
-    if (mapAcc.size === 0) keywordWindow.delete(kw);
   }
-}
+  if (removed > 0) {
+    console.log(`🧹 ניקוי זיכרון: נמחקו ${removed} קבוצות מחלון הזמן`);
+  }
+}, 60 * 1000);
 
-function noteKeyword(keyword, account) {
-  const kw = keyword.toLowerCase();
-  if (!keywordWindow.has(kw)) keywordWindow.set(kw, new Map());
-  keywordWindow.get(kw).set(account, Date.now());
-  withinWindowPurge();
-  return keywordWindow.get(kw).size;
+// ----------- Helpers -----------
+function hmacEquals(apifySig, rawBody, secret) {
+  try {
+    if (!secret) return false;
+    const computed = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+    // חלק מהשירותים שולחים בפורמט "sha256=...", ננקה אם יש prefix
+    const cleanSig = String(apifySig || "").replace(/^sha256=/i, "").trim();
+    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(cleanSig));
+  } catch {
+    return false;
+  }
 }
 
 function matchKeywords(text) {
-  if (!KEYWORDS.length) return null;
-  const t = (text || "").toLowerCase();
-  const hit = KEYWORDS.find(k => k && t.includes(k));
-  return hit || null;
+  if (!text) return [];
+  const t = String(text).toLowerCase();
+  return KEYWORDS.filter((k) => t.includes(k));
 }
 
-// ------------ EXPRESS APP ------------
-const app = express();
-app.use(express.json({ limit: "1mb" }));
+async function sendTelegram(html) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.error("❌ שליחת טלגרם נכשלה: חסר TELEGRAM_TOKEN או TELEGRAM_CHAT_ID");
+    return;
+  }
+  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+  const body = {
+    chat_id: TELEGRAM_CHAT_ID,
+    text: html,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  };
+  try {
+    await axios.post(url, body, { timeout: 15000 });
+  } catch (err) {
+    console.error("⚠️ שגיאה בשליחת טלגרם:", err?.response?.data || err.message);
+  }
+}
 
+function fmtHtmlSafe(s = "") {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function formatItemForTg(item, sourceTag = "📰") {
+  const text =
+    item.text || item.content || item.full_text || item.title || item.body || "";
+  const url =
+    item.url || item.link || item.permalink || item.tweetUrl || item.postUrl || "";
+  const handle =
+    item.username || item.screen_name || item.account || item.author || "";
+  const created =
+    item.created_at || item.createdAt || item.timestamp || item.date || "";
+
+  const safe = fmtHtmlSafe(text);
+  return (
+    `<b>${sourceTag}</b> ` +
+    (handle ? `<b>@${fmtHtmlSafe(handle)}</b>\n` : "") +
+    (created ? `<i>${fmtHtmlSafe(created)}</i>\n` : "") +
+    `${safe}\n` +
+    (url ? `<a href="${fmtHtmlSafe(url)}">Link</a>` : "")
+  );
+}
+
+function pushToWindow(keyword, account, sample) {
+  const now = Date.now();
+  if (!windowStore.has(keyword)) {
+    windowStore.set(keyword, {
+      accounts: new Set(),
+      firstAt: now,
+      lastAt: now,
+      samples: [],
+    });
+  }
+  const obj = windowStore.get(keyword);
+  obj.accounts.add(account);
+  obj.lastAt = now;
+  if (obj.samples.length < 5) obj.samples.push(sample); // נשמור מדגם לתצוגה
+  return obj.accounts.size;
+}
+
+// ----------- Routes -----------
+
+// 1) Health
 app.get("/health", (req, res) => {
-  return res.status(200).send("OK");
+  res.json({
+    ok: true,
+    service: "alert-bot",
+    time: new Date().toISOString(),
+    hasTelegram: Boolean(TELEGRAM_TOKEN && TELEGRAM_CHAT_ID),
+  });
 });
 
-// דף סטטוס JSON (לבדיקה מהדפדפן/פינג)
-app.get("/diag", (req, res) => {
-  const now = new Date();
-  const payload = {
+// 2) Debug
+app.get("/debug", (req, res) => {
+  const w = {};
+  for (const [kw, obj] of windowStore.entries()) {
+    w[kw] = {
+      uniqueAccounts: obj.accounts.size,
+      ageSec: Math.round((Date.now() - obj.firstAt) / 1000),
+      lastUpdateSec: Math.round((Date.now() - obj.lastAt) / 1000),
+      samples: obj.samples.map((s) => ({
+        id: s._id,
+        account: s._account,
+        textPreview: (s._text || "").slice(0, 120),
+      })),
+    };
+  }
+  res.json({
     ok: true,
-    now: now.toISOString(),
-    uptime_sec: Math.floor((Date.now() - processStart) / 1000),
     env: {
-      telegramConfigured: !!(TELEGRAM_TOKEN && TELEGRAM_CHAT_ID),
-      hasWebhookSecret: !!APIFY_WEBHOOK_SECRET,
-      keywordsCount: KEYWORDS.length,
+      port: PORT,
+      keywords: KEYWORDS,
       windowSec: WINDOW_SEC,
       minUniqueAccounts: MIN_UNIQUE_ACCOUNTS,
-      maxItemsFetch: MAX_ITEMS_FETCH
+      maxItemsFetch: MAX_ITEMS_FETCH,
+      hasTelegram: Boolean(TELEGRAM_TOKEN && TELEGRAM_CHAT_ID),
+      hasApifySecret: Boolean(APIFY_WEBHOOK_SECRET),
     },
-    lastWebhookAt,
-    lastOkAt,
-    lastError
-  };
-  lastDiag = payload;
-  res.json(payload);
+    store: w,
+  });
 });
 
-// Webhook מ-Apify: /apify/webhook?src=x|truth&secret=...
-app.post("/apify/webhook", async (req, res) => {
+// 3) test/telegram
+app.get("/test/telegram", async (req, res) => {
+  const msg = req.query.msg || "בדיקת טלגרם ✅";
+  await sendTelegram(`<b>Test</b>\n${fmtHtmlSafe(String(msg))}`);
+  res.json({ ok: true, sent: true });
+});
+
+// 4) simulate-error
+app.get("/simulate-error", (req, res) => {
+  const code = Number(req.query.code || 500);
+  const reason = String(req.query.reason || "manual_test_error");
+  console.error(`❌ simulate-error: code=${code} reason=${reason}`);
+  res.status(code).json({ ok: false, code, reason });
+});
+
+// 5) נקודת Webhook מאפיפיי
+app.post("/webhook/apify", async (req, res) => {
   try {
-    const { src, secret } = req.query;
-    if (!APIFY_WEBHOOK_SECRET || secret !== APIFY_WEBHOOK_SECRET) {
-      setLastError(ERROR_CODES.WEBHOOK_REJECTED, `Bad secret from src=${src}`);
-      return res.status(403).json({ ok: false, code: ERROR_CODES.WEBHOOK_REJECTED });
+    // אימות חתימה (אם הוגדר סוד)
+    // אפיפיי שולחת header "X-Apify-Signature" עם HMAC SHA256 על גוף הבקשה הגולמי
+    const sigHeader =
+      req.header("x-apify-signature") || req.header("X-Apify-Signature");
+    const rawBody = req.body; // Buffer כי זה raw
+    const verified = APIFY_WEBHOOK_SECRET
+      ? hmacEquals(sigHeader, rawBody, APIFY_WEBHOOK_SECRET)
+      : true; // אם אין secret — נתיר אך נדפיס אזהרה
+
+    if (!verified) {
+      console.warn("⚠️ חתימת Webhook לא אומתה. בדוק APIFY_WEBHOOK_SECRET / הגדרות וובהוק באפיפיי");
+      return res.status(401).json({ ok: false, error: "invalid_signature" });
     }
 
-    lastWebhookAt = new Date().toISOString();
-
-    // שים לב: כש-Run מצליח, Apify שולח אובייקט run עם defaultDatasetId
-    const runData = req.body?.data;
-    const datasetId = runData?.defaultDatasetId;
-    if (!datasetId) {
-      setLastError(ERROR_CODES.WEBHOOK_NO_DATASET, `src=${src} no datasetId`);
-      return res.status(200).json({ ok: true, note: "no dataset id" });
-    }
-
-    // משיכת פריטים (אפשר להשאיר כאן כ-stub אם כבר מושכים בצד אחר)
+    // אחרי שאימתנו, ננסה לפרש JSON מגוף raw
+    let payload;
     try {
-      const url = `https://api.apify.com/v2/datasets/${datasetId}/items?clean=true&limit=${MAX_ITEMS_FETCH}&desc=1`;
-      const { data } = await axios.get(url, { timeout: 20000 });
-      if (!Array.isArray(data) || data.length === 0) {
-        setLastError(ERROR_CODES.NO_KEYWORD_MATCH, `src=${src} empty dataset`);
-        return res.status(200).json({ ok: true, note: "empty dataset" });
-      }
+      payload = JSON.parse(rawBody.toString("utf8"));
+    } catch (e) {
+      console.error("❌ Webhook JSON parse error:", e.message);
+      return res.status(400).json({ ok: false, error: "invalid_json" });
+    }
 
-      // לולאה על הפריטים – דוגמה בסיסית: חיפוש מילות מפתח ושקלול חשבונות
-      let triggered = [];
-      for (const it of data) {
-        const text = it.text || it.content || it.full_text || it.title || "";
-        const hit = matchKeywords(text);
-        if (!hit) continue;
+    // מבנה טיפוסי של Apify webhook: payload.resource.defaultDatasetId או payload.resource.defaultKeyValueStoreId וכו'
+    const src = payload?.resource || {};
+    const sourceTag =
+      payload?.actorId || payload?.actorRunId || payload?.eventType || "Apify";
 
-        // משוך שם חשבון/יוזר מהשדות השונים
-        const account =
-          it.username || it.screen_name || it.author ||
-          it.account || it.user || it.handle || "unknown";
+    // ננסה להוציא פריטים ישירות אם השולח כבר שם אותם בבקשה,
+    // או לחלופין נעשה פיענוח שטחי לסכמה נפוצה (results/items)
+    let items =
+      payload?.items ||
+      payload?.results ||
+      payload?.data?.items ||
+      payload?.data ||
+      [];
 
-        const n = noteKeyword(hit, `${src}:${account}`);
-        if (n >= MIN_UNIQUE_ACCOUNTS) {
-          triggered.push({ keyword: hit, accounts: n, sampleAccount: account });
+    // אם אין פריטים — לא נכשלים; נחזיר ok כדי לא להטריד את אפיפיי
+    if (!Array.isArray(items)) items = [];
+    if (items.length > MAX_ITEMS_FETCH) {
+      items = items.slice(0, MAX_ITEMS_FETCH);
+    }
+
+    let triggers = 0;
+
+    for (const it of items) {
+      // נזהה מזהה ייחודי
+      const id =
+        it.id ||
+        it.tweet_id ||
+        it.tweetId ||
+        it.postId ||
+        it.uniqueId ||
+        it.url ||
+        it.link ||
+        crypto.createHash("md5").update(JSON.stringify(it)).digest("hex");
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+
+      // טקסט לחיפוש מילות מפתח
+      const text =
+        it.text || it.content || it.full_text || it.title || it.body || "";
+      const hits = matchKeywords(text);
+      if (!hits.length) continue;
+
+      // חשבון / יוזר למניין ייחודיות
+      const account =
+        it.username || it.screen_name || it.account || it.author || "unknown";
+
+      // נשמור מדגם פנימי להצגה ב-/debug
+      const sample = {
+        _id: id,
+        _text: text,
+        _account: account,
+      };
+
+      // לכל מילת מפתח שנמצאה באייטם — נעדכן חלון
+      for (const kw of hits) {
+        const distinct = pushToWindow(kw, account, sample);
+
+        // אם כמות החשבונות הייחודיים במילת המפתח ≥ הסף — שולחים התראה
+        if (distinct >= MIN_UNIQUE_ACCOUNTS) {
+          const group = windowStore.get(kw);
+          const uCount = group?.accounts?.size || distinct;
+
+          const title = `🚨 התאמה מרובה: "${kw}" הופיע אצל ${uCount} חשבונות ב-${WINDOW_SEC} שניות`;
+          // נוסיף עד 3 דוגמאות
+          const samplesHtml = (group?.samples || [])
+            .slice(0, 3)
+            .map((s) => {
+              const safe = fmtHtmlSafe(s._text || "").slice(0, 240);
+              return `• <b>@${fmtHtmlSafe(s._account)}</b>: ${safe}`;
+            })
+            .join("\n");
+
+          const html =
+            `<b>${title}</b>\n\n` +
+            `${samplesHtml || "(ללא דוגמאות)"}\n\n` +
+            `<i>מקור: ${fmtHtmlSafe(sourceTag)}</i>`;
+
+          await sendTelegram(html);
+
+          // כדי שלא נשלח שוב על אותה מילת מפתח ברצף, ננקה את הקבוצה אחרי שליחה
+          windowStore.delete(kw);
+          triggers++;
         }
       }
-
-      if (triggered.length === 0) {
-        setLastError(ERROR_CODES.NO_KEYWORD_MATCH, `src=${src} no quorum`);
-        return res.status(200).json({ ok: true, note: "no quorum" });
-      }
-
-      // שליחת התראה מסכמת (אפשר לעצב יפה יותר)
-      const lines = triggered.map(t =>
-        `⬆️ המילה "${t.keyword}" הופיעה אצל ${t.accounts}+ חשבונות (${src})`
-      );
-      const msg = [
-        `<b>🚨 טריגר קולקטיבי הופעל</b>`,
-        ...lines,
-        ``,
-        `<i>חלון: ${WINDOW_SEC}s | סף חשבונות: ${MIN_UNIQUE_ACCOUNTS} | מקור: ${src}</i>`
-      ].join("\n");
-
-      await sendTelegram({ text: msg, html: true });
-      setLastOk("collective trigger sent");
-      return res.status(200).json({ ok: true, triggered });
-    } catch (err) {
-      setLastError(ERROR_CODES.APIFY_DATASET_FAIL, err?.response?.data || err.message);
-      return res.status(200).json({ ok: true, code: ERROR_CODES.APIFY_DATASET_FAIL });
     }
-  } catch (e) {
-    setLastError(ERROR_CODES.INTERNAL_ERROR, e?.message);
-    return res.status(500).json({ ok: false, code: ERROR_CODES.INTERNAL_ERROR });
+
+    console.log(
+      `✅ Webhook התקבל: items=${items.length}, triggers=${triggers}, source=${sourceTag}`
+    );
+    return res.json({ ok: true, items: items.length, triggers });
+
+  } catch (err) {
+    console.error("❌ Webhook handler error:", err.message);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
-// ------------ TELEGRAM COMMANDS (polling קטן) ------------
-let tgOffset = 0;
-const ALLOWED = new Set(TELEGRAM_ALLOWED_CHAT_IDS.concat(TELEGRAM_CHAT_ID ? [TELEGRAM_CHAT_ID] : []));
+// --- Home ---
+app.get("/", (req, res) => {
+  res.send("Alert bot is up. Try /health or /debug.");
+});
 
-async function handleTgCommand(upd) {
-  const msg = upd.message || upd.edited_message;
-  if (!msg) return;
-
-  const chatId = String(msg.chat?.id || "");
-  const text = (msg.text || "").trim();
-
-  // אם לא מורשה – נתעלם בשקט
-  if (!ALLOWED.has(chatId)) return;
-
-  if (text === "/ping") {
-    await sendTelegram({ chatId, text: "pong ✅" });
-    return;
-  }
-
-  if (text === "/status" || text === "/diag") {
-    const uptime = Math.floor((Date.now() - processStart) / 1000);
-    const parts = [
-      "מצב המערכת ✅",
-      `זמן ריצה: ${uptime}s`,
-      `Webhook Secret: ${APIFY_WEBHOOK_SECRET ? "מוגדר" : "חסר"}`,
-      `Keywords: ${KEYWORDS.length ? KEYWORDS.join(", ") : "לא הוגדרו"}`,
-      `חלון: ${WINDOW_SEC}s | סף חשבונות: ${MIN_UNIQUE_ACCOUNTS}`,
-      `בדיקה אחרונה: ${lastDiag ? lastDiag.now : "—"}`,
-      `Webhook אחרון: ${lastWebhookAt || "—"}`,
-      `OK אחרון: ${lastOkAt || "—"}`,
-      `שגיאה אחרונה: ${lastError ? `${lastError.code} @ ${lastError.at}` : "—"}`,
-      lastError?.detail ? `פרטים: ${typeof lastError.detail === "string" ? lastError.detail : JSON.stringify(lastError.detail)}` : ""
-    ].filter(Boolean);
-
-    await sendTelegram({ chatId, text: parts.join("\n") });
-    return;
-  }
-
-  if (text.startsWith("/echo ")) {
-    await sendTelegram({ chatId, text: text.slice(6) });
-    return;
-  }
-}
-
-async function pollTelegram() {
-  if (!TELEGRAM_TOKEN) return; // אין בוט – לא נבצע polling
-  try {
-    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates`;
-    const { data } = await axios.post(url, { timeout: 30, allowed_updates: ["message"], offset: tgOffset, timeout: 25 });
-    const results = data?.result || [];
-    for (const upd of results) {
-      tgOffset = Math.max(tgOffset, (upd.update_id || 0) + 1);
-      await handleTgCommand(upd);
-    }
-  } catch (e) {
-    // לא מפילים את התהליך – רק לוג
-    console.warn("Telegram polling warn:", e?.response?.data || e.message);
-  }
-}
-
-// כל 3 שניות – קליל
-setInterval(pollTelegram, 3000);
-
-// ------------ START ------------
+// ----------- Start -----------
 app.listen(PORT, () => {
-  console.log(`Webhook bot running on :${PORT}`);
+  console.log(`✅ Webhook bot running on :${PORT}`);
 });
