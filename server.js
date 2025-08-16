@@ -1,125 +1,182 @@
-// server.js
+// index.js — Webhook-first alerts (no polling)
 import express from "express";
-import bodyParser from "body-parser";
 import axios from "axios";
 
-// ===== Env =====
-const APIFY_TOKEN = process.env.APIFY_TOKEN;
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const app = express();
+app.use(express.json({ limit: "2mb" }));
 
-const KEYWORDS = (process.env.KEYWORDS || "tariff,tariffs,breaking,0dte")
+// ===== ENV =====
+const APIFY_TOKEN        = process.env.APIFY_TOKEN;
+const TELEGRAM_TOKEN     = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
+const KEYWORDS           = (process.env.KEYWORDS || "tariff,tariffs,breaking,0dte")
   .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 
-// IDs של ה־Actors כפי שמופיעים ב־Apify (user/actor)
-const APIFY_TWITTER_ACTOR = (process.env.APIFY_TWITTER_ACTOR || "apidojo/tweet-scraper").replace("/", "~");
-const APIFY_TRUTH_ACTOR   = (process.env.APIFY_TRUTH_ACTOR   || "muhammetakkurt/truth-social-scraper").replace("/", "~");
+// אבטחת ה-webhook (אות סודי שתשים/י ב-Apify)
+const APIFY_WEBHOOK_SECRET = process.env.APIFY_WEBHOOK_SECRET || "";
 
-if (!APIFY_TOKEN)  throw new Error("Missing APIFY_TOKEN");
-if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) throw new Error("Missing TELEGRAM_TOKEN or TELEGRAM_CHAT_ID");
+// פרמטרים להתנהגות
+const WINDOW_SEC            = Number(process.env.WINDOW_SEC || 300);   // חלון 5 דקות
+const MIN_UNIQUE_ACCOUNTS   = Number(process.env.MIN_UNIQUE_ACCOUNTS || 2);
+const MAX_ITEMS_FETCH       = Number(process.env.MAX_ITEMS_FETCH || 50);
 
-// ===== Helpers =====
-function matchKeywords(text) {
-  if (!text) return false;
+// ===== עזר =====
+function kwMatch(text) {
+  if (!text) return [];
   const t = String(text).toLowerCase();
-  return KEYWORDS.some(k => t.includes(k));
+  return KEYWORDS.filter(k => t.includes(k));
 }
+function nowSec() { return Math.floor(Date.now() / 1000); }
 
 async function sendTelegram(html) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
   const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
   const body = { chat_id: TELEGRAM_CHAT_ID, text: html, parse_mode: "HTML", disable_web_page_preview: true };
-  try {
-    await axios.post(url, body, { timeout: 15000 });
-  } catch (err) {
-    console.error("Telegram error:", err?.response?.data || err.message);
+  try { await axios.post(url, body, { timeout: 15000 }); }
+  catch (e) { console.error("Telegram error:", e?.response?.data || e.message); }
+}
+
+// מאגר זיכרון קצר: מילה => {חשבון => timestamp אחרון}
+const windowStore = new Map(); // Map<string, Map<string, number>>
+// אנטי-ספאם: מילה => timestamp של האיתות האחרון
+const lastAlertAt = new Map();
+// אנטי-דופלקייט לפי מזהי פוסטים
+const seenIds = new Set();
+
+function pruneOld() {
+  const cutoff = nowSec() - WINDOW_SEC;
+  for (const [kw, acctMap] of windowStore) {
+    for (const [acct, ts] of acctMap) {
+      if (ts < cutoff) acctMap.delete(acct);
+    }
+    if (acctMap.size === 0) windowStore.delete(kw);
   }
 }
 
-function formatMessage(item, sourceTag) {
-  const text = item.text || item.content || item.full_text || item.title || "";
-  const url  = item.url || item.link || item.tweetUrl || item.twitterUrl || item.permalink || "";
-  const user = item.username || item.screen_name || item.author || item.account || "";
-  const time = item.created_at || item.date || item.createdAt || item.timestamp || "";
-
-  const safe = String(text).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-
-  return (
-    `<b>${sourceTag}</b> ` +
-    (user ? `<b>@${user}</b>\n` : "") +
-    (time ? `<i>${time}</i>\n` : "") +
-    `${safe}\n` +
-    (url ? `<a href="${url}">Link</a>` : "")
-  );
+function noteHit(keyword, account) {
+  if (!windowStore.has(keyword)) windowStore.set(keyword, new Map());
+  windowStore.get(keyword).set(account, nowSec());
 }
 
-async function fetchDatasetItems(datasetId, limit = 50) {
+function shouldAlert(keyword) {
+  const acctCount = windowStore.get(keyword)?.size || 0;
+  if (acctCount < MIN_UNIQUE_ACCOUNTS) return false;
+  const last = lastAlertAt.get(keyword) || 0;
+  if (nowSec() - last < Math.ceil(WINDOW_SEC / 2)) return false; // לא יותר מפעם בחצי חלון
+  lastAlertAt.set(keyword, nowSec());
+  return true;
+}
+
+function sanitize(s) {
+  return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+// נורמליזציה של אייטמים מ-X ו-Truth
+function normalizeItem(it, sourceTag) {
+  const id =
+    it.id || it.tweet_id || it.tweetId || it.postId || it.status_id || it.uniqueId || it.permalink || it.url;
+  const text = it.text || it.full_text || it.content || it.title || it.body || "";
+  const url  = it.url || it.link || it.tweetUrl || it.twitterUrl || it.permalink || it.uri || "";
+  const account =
+    it.username || it.user || it.screen_name || it.account || it.handle || it.author || it.account_name || "";
+  const created =
+    it.created_at || it.date || it.createdAt || it.timestamp || it.created_at_text || "";
+
+  return { id, text, url, account, created, sourceTag };
+}
+
+// הורדת תוצאות מהריצה (dataset)
+async function fetchDatasetItems(datasetId) {
   if (!datasetId) return [];
-  const url = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}&clean=true&limit=${limit}&desc=1`;
+  const url = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}&clean=true&limit=${MAX_ITEMS_FETCH}&desc=1`;
   try {
     const res = await axios.get(url, { timeout: 20000 });
     return Array.isArray(res.data) ? res.data : [];
-  } catch (err) {
-    console.error("Dataset fetch error:", err?.response?.data || err.message);
+  } catch (e) {
+    console.error("Dataset fetch error:", e?.response?.data || e.message);
     return [];
   }
 }
 
-// זיכרון קצר למניעת כפילויות
-const sentIds = new Set();
-
-// ===== App =====
-const app = express();
-app.use(bodyParser.json());
-
-// בריאות
-app.get("/", (_req, res) => res.send("OK"));
-
-// נקודת ה-webhook מאפיפיי
+// ===== Webhook endpoint =====
 app.post("/apify/webhook", async (req, res) => {
   try {
-    // Apify שולח payload עם resource.defaultDatasetId (בדיפולט)
-    const body = req.body || {};
-    const q = req.query || {};
-
-    // נזהה מקור (X / Truth) רק בשביל האייקון
-    const sourceTag = q.src === "x" ? "🐦 X" :
-                      q.src === "truth" ? "📣 Truth Social" : "🔔";
-
-    const datasetId =
-      body?.resource?.defaultDatasetId ||
-      body?.resource?.datasetId ||
-      body?.datasetId;
-
-    if (!datasetId) {
-      console.log("Webhook without datasetId", JSON.stringify(body).slice(0,300));
-      return res.status(200).json({ ok: true, note: "no datasetId" });
+    // אימות חתימה פשוט (Header X-Apify-Signature או query secret)
+    const provided = req.header("X-Apify-Signature") || req.query.secret || "";
+    if (APIFY_WEBHOOK_SECRET && provided !== APIFY_WEBHOOK_SECRET) {
+      return res.status(401).json({ ok: false, error: "bad signature" });
     }
 
-    const items = await fetchDatasetItems(datasetId, 50);
+    const { eventData } = req.body || req.query || {};
+    // בפאנל "HTTP webhook" ב-Apify בחרי Payload: "Run object" (ברירת מחדל)
+    // הפורמט הנפוץ:
+    const run = req.body?.data || req.body?.resource || eventData || {};
+    const datasetId = run?.defaultDatasetId || run?.data?.defaultDatasetId;
+    const actId     = run?.actId || run?.actRunId || "";
+    const src       = req.query?.src || req.body?.src || ""; // נזין ?src=x / ?src=truth ב-URL
 
-    for (const it of items) {
-      const id  = it.id || it.tweet_id || it.tweetId || it.postId || it.uniqueId || it.permalink || it.url;
-      const txt = it.text || it.content || it.full_text || it.title || "";
-      if (!id || sentIds.has(id)) continue;
-      if (!matchKeywords(txt)) continue;
+    // מורידים פריטים
+    const items = await fetchDatasetItems(datasetId);
 
-      await sendTelegram(formatMessage(it, sourceTag));
-      sentIds.add(id);
-      if (sentIds.size > 5000) {
-        // ניקוי זיכרון פעם ב...
-        const first = sentIds.values().next().value;
-        sentIds.delete(first);
+    // מנרמלים ומטפלים
+    pruneOld();
+    const hitsForAlertText = []; // נשמור דוגמאות לאיתות
+
+    for (const raw of items) {
+      const item = normalizeItem(raw, src === "truth" ? "📣 Truth Social" : "🐦 X");
+      if (!item.id || seenIds.has(item.id)) continue;
+      seenIds.add(item.id);
+
+      const matches = kwMatch(item.text);
+      if (matches.length === 0) continue;
+
+      for (const kw of matches) {
+        if (!item.account) continue;
+        noteHit(kw, item.account);
+        if (shouldAlert(kw)) {
+          hitsForAlertText.push({ kw, item });
+        }
       }
     }
 
-    res.json({ ok: true, received: items.length });
+    // אם יש טריגר – בונים הודעה
+    if (hitsForAlertText.length > 0) {
+      // נאחד לפי מילת מפתח (ייתכן כמה טריגרים שונים)
+      const byKw = new Map();
+      for (const h of hitsForAlertText) {
+        if (!byKw.has(h.kw)) byKw.set(h.kw, []);
+        byKw.get(h.kw).push(h.item);
+      }
+
+      for (const [kw, samples] of byKw) {
+        // ניקח עד 3 דוגמאות ליפה
+        const parts = samples.slice(0, 3).map(s =>
+          `<b>${s.sourceTag}</b> <b>@${sanitize(s.account)}</b>\n${sanitize(s.text)}\n${s.url ? `<a href="${s.url}">Link</a>` : ""}`
+        ).join("\n\n— — —\n\n");
+
+        const accounts = [...(windowStore.get(kw)?.keys() || [])];
+        const msg =
+          `<b>⚡ אות מילה משותפת</b>\n` +
+          `<b>מילה:</b> <code>${sanitize(kw)}</code>\n` +
+          `<b>מס' חשבונות בחלון ${WINDOW_SEC/60} דק':</b> ${accounts.length} (${accounts.map(a => '@'+sanitize(a)).join(", ")})\n\n` +
+          parts;
+
+        await sendTelegram(msg);
+      }
+    }
+
+    res.json({ ok: true });
   } catch (e) {
-    console.error("Webhook handler error:", e.message);
-    res.status(200).json({ ok: false, error: e.message });
+    console.error("Webhook handler error:", e);
+    res.status(500).json({ ok: false });
   }
 });
 
+// health
+app.get("/", (_, res) => res.send("OK"));
+
+// start
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Webhook server listening on :${PORT}`);
+  console.log(`Webhook bot running on :${PORT}`);
 });
