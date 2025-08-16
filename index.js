@@ -1,389 +1,389 @@
-// index.js
-// Webhook + Telegram bot with LLM "market impact" scoring
+// ===============================
+// Simple Alert Bot (Express + Telegram + Gemini Scoring)
+// ===============================
+
 import express from "express";
-import axios from "axios";
 import crypto from "crypto";
-import bodyParser from "body-parser";
 
-// ----------- ENV -----------
-const PORT = process.env.PORT || 8080;
+// ------- ENV -------
+const {
+  PORT = 8080,
 
-const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+  // Telegram
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_CHAT_ID,
 
-const KEYWORDS = (process.env.KEYWORDS || "tariff,tariffs,breaking,fed,fomc")
-  .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  // Optional scoring
+  RISK_SCORING = "off",
+  GEMINI_API_KEY,
 
-const APIFY_WEBHOOK_SECRET = process.env.APIFY_WEBHOOK_SECRET || "";
+  // Keywords and rules
+  KEYWORDS = "tariff,tariffs,breaking,0dte,embargo,sanctions,trade war,customs,duty",
+  WINDOW_SEC = "300",              // חלון זמן שניות לצבירת אירועים
+  MIN_UNIQUE_ACCOUNTS = "2",       // כמה חשבונות שונים לפחות כדי לטריגר
+  MAX_ITEMS_FETCH = "50",          // לא בשימוש כאן (רלוונטי אם תוסיף polling)
 
-const WINDOW_SEC          = Number(process.env.WINDOW_SEC || 300);
-const MIN_UNIQUE_ACCOUNTS = Number(process.env.MIN_UNIQUE_ACCOUNTS || 2);
-const MAX_ITEMS_FETCH     = Number(process.env.MAX_ITEMS_FETCH || 50);
+  // Webhook security
+  APIFY_WEBHOOK_SECRET,            // נדרש: אותו secret ששמת ב-?secret=...
+} = process.env;
 
-// LLM provider (optional)
-const MODEL_PROVIDER   = (process.env.MODEL_PROVIDER || "").toLowerCase(); // "openai" | "anthropic"
-const OPENAI_API_KEY   = process.env.OPENAI_API_KEY || "";
-const OPENAI_MODEL     = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const ANTHROPIC_API_KEY= process.env.ANTHROPIC_API_KEY || "";
-const ANTHROPIC_MODEL  = process.env.ANTHROPIC_MODEL || "claude-3-5-haiku-20241022";
-
-// ----------- Validate base env -----------
-if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
-  console.error("❌ חסרים משתני סביבה: TELEGRAM_TOKEN / TELEGRAM_CHAT_ID");
+// ------- Guards -------
+if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+  console.error("❌ Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID env vars");
 }
-if (!KEYWORDS.length) {
-  console.warn("⚠️ KEYWORDS ריק — מומלץ להגדיר מילות מפתח רלוונטיות");
+if (!APIFY_WEBHOOK_SECRET) {
+  console.warn("⚠️ APIFY_WEBHOOK_SECRET is missing. Webhook will reject requests without correct ?secret.");
 }
 
-// ----------- App init -----------
+// ------- Globals -------
 const app = express();
+app.use(express.json({ limit: "2mb" }));
 
-// raw body for signature verification (Apify webhook)
-app.use("/webhook/apify", bodyParser.raw({ type: "*/*", limit: "2mb" }));
-app.use(bodyParser.json({ limit: "2mb" }));
+// טבלת “אירועים אחרונים” לזיהוי חפיפה של מילים בין כמה חשבונות
+// מבנה: { keywordLc: Map<keywordLc, Array<{account, text, url, ts, source}>> }
+const recentByKeyword = new Map();
+// דה-דופליקציה: מזהים שנשלחו
+const sentIds = new Set();
 
-// ----------- State / Cache -----------
-const windowStore = new Map(); // { kw -> { accounts:Set, firstAt, lastAt, samples:[...] } }
-const seenIds = new Set();
+// פענוח/חלוקה של מילות מפתח
+const KEYWORDS_LIST = KEYWORDS.split(",")
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean);
 
-setInterval(() => {
-  const now = Date.now();
-  let removed = 0;
-  for (const [kw, obj] of windowStore.entries()) {
-    if (now - obj.lastAt > WINDOW_SEC * 1000) {
-      windowStore.delete(kw);
-      removed++;
+// הגדרות חלון / ספים
+const WINDOW_MS = Math.max(1, Number(WINDOW_SEC)) * 1000;
+const MIN_ACCOUNTS = Math.max(1, Number(MIN_UNIQUE_ACCOUNTS));
+
+// ------- Utilities -------
+
+function nowTs() {
+  return Date.now();
+}
+
+function htmlEscape(s = "") {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function uniq(arr) {
+  return [...new Set(arr)];
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+// מחלצים טקסט/לינק/חשבון מכל מבנה אפשרי (X/Truth/כללי)
+function normalizeItem(raw = {}) {
+  const text =
+    raw.text ||
+    raw.content ||
+    raw.full_text ||
+    raw.title ||
+    "";
+
+  const url =
+    raw.url ||
+    raw.link ||
+    raw.permalink ||
+    raw.tweetUrl ||
+    raw.twitterUrl ||
+    "";
+
+  const account =
+    raw.username ||
+    raw.screen_name ||
+    raw.author ||
+    raw.account ||
+    raw.user ||
+    "";
+
+  const created =
+    raw.created_at ||
+    raw.createdAt ||
+    raw.date ||
+    raw.timestamp ||
+    "";
+
+  // מזהה דדופ
+  const id = raw.id || raw.tweet_id || raw.tweetId || raw.postId || raw.uniqueId || url || (created + ":" + account + ":" + text.slice(0, 50));
+
+  return { id, text, url, account, created };
+}
+
+// מחפשים אילו מילות מפתח מופיעות בטקסט
+function extractMatchedKeywords(text = "") {
+  const lc = text.toLowerCase();
+  const hits = KEYWORDS_LIST.filter(k => lc.includes(k));
+  return uniq(hits);
+}
+
+// ניקוי חלון ישן
+function cleanupOldWindow() {
+  const cutoff = nowTs() - WINDOW_MS;
+  for (const [kw, arr] of recentByKeyword.entries()) {
+    const filtered = arr.filter(it => it.ts >= cutoff);
+    if (filtered.length === 0) {
+      recentByKeyword.delete(kw);
+    } else {
+      recentByKeyword.set(kw, filtered);
     }
   }
-  if (removed > 0) console.log(`🧹 ניקוי זיכרון: ${removed} קבוצות`);
-}, 60 * 1000);
-
-// ----------- Helpers -----------
-function hmacEquals(apifySig, rawBody, secret) {
-  try {
-    if (!secret) return false;
-    const computed = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
-    const cleanSig = String(apifySig || "").replace(/^sha256=/i, "").trim();
-    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(cleanSig));
-  } catch {
-    return false;
-  }
 }
 
-function matchKeywords(text) {
-  if (!text) return [];
-  const t = String(text).toLowerCase();
-  return KEYWORDS.filter((k) => t.includes(k));
+// הוספת אירוע ושאילתה האם חצינו את הסף (≥ MIN_UNIQUE_ACCOUNTS)
+function registerAndCheck(keywordLc, entry) {
+  const list = recentByKeyword.get(keywordLc) || [];
+  list.push(entry);
+  recentByKeyword.set(keywordLc, list);
+
+  const uniqueAccounts = uniq(list.map(x => x.account || "unknown")).filter(Boolean);
+  return uniqueAccounts.length >= MIN_ACCOUNTS;
 }
 
-async function sendTelegram(html) {
-  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.error("❌ שליחת טלגרם נכשלה: חסר TELEGRAM_TOKEN או TELEGRAM_CHAT_ID");
+// שליחת הודעה לטלגרם (HTML)
+async function sendTelegram(html, extra = {}) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.error("❌ Telegram envs missing");
     return;
   }
-  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-  const body = { chat_id: TELEGRAM_CHAT_ID, text: html, parse_mode: "HTML", disable_web_page_preview: true };
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const body = {
+    chat_id: TELEGRAM_CHAT_ID,
+    text: html,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    ...extra,
+  };
+
   try {
-    await axios.post(url, body, { timeout: 15000 });
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      console.error("⚠️ Telegram send error:", data);
+    }
+    return data;
   } catch (err) {
-    console.error("⚠️ שגיאה בשליחת טלגרם:", err?.response?.data || err.message);
+    console.error("⚠️ Telegram send exception:", err.message);
   }
 }
 
-function fmtHtmlSafe(s = "") {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
+// דירוג השפעה עם Gemini (אופציונלי)
+async function getRiskScoring(text) {
+  if (RISK_SCORING !== "on") return "🔍 ניתוח כבוי (RISK_SCORING=off)";
+  if (!GEMINI_API_KEY) return "⚠️ חסר GEMINI_API_KEY";
 
-function pushToWindow(keyword, account, sample) {
-  const now = Date.now();
-  if (!windowStore.has(keyword)) {
-    windowStore.set(keyword, { accounts: new Set(), firstAt: now, lastAt: now, samples: [] });
-  }
-  const obj = windowStore.get(keyword);
-  obj.accounts.add(account);
-  obj.lastAt = now;
-  if (obj.samples.length < 5) obj.samples.push(sample);
-  return obj.accounts.size;
-}
+  try {
+    const resp = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_API_KEY,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text:
+`Analyze this financial/social post and rate its expected *short-term* market impact (S&P/major indices):
+"${text}"
 
-function samplesToPlainText(samples) {
-  // טקסט תמציתי שמזין את ה-LLM (עד ~800 תווים)
-  let out = "";
-  for (const s of samples.slice(0, 5)) {
-    const line = `@${s._account}: ${String(s._text || "").replace(/\s+/g, " ").trim()}`;
-    if ((out + "\n" + line).length > 800) break;
-    out += (out ? "\n" : "") + line;
-  }
-  return out;
-}
-
-// ----------- LLM Impact Scoring -----------
-function formatImpactLabel(level) {
-  switch (level) {
-    case "none":      return "🟢 אין השפעה";
-    case "low":       return "🟡 השפעה קלה";
-    case "medium":    return "🟠 השפעה בינונית";
-    case "high":      return "🔴 השפעה חזקה";
-    default:          return "⚪️ ללא שיפוט";
-  }
-}
-
-// פרומפט קצר וברור: החזר JSON בלבד
-const SYSTEM_PROMPT = `
-You are a finance event triage assistant. Given several short social posts about a potential macro/market event, you must OUTPUT STRICT JSON ONLY with this schema:
-{"level":"none|low|medium|high","reason":"one short sentence in English about why"}
-Guidelines:
-- "high" only for likely market-moving (e.g., broad tariffs, surprise Fed action, war escalation, terrorist attack, major sanctions).
-- "medium" for material but uncertain/sector-specific.
-- "low" for routine or low-confidence signals.
-- "none" for noise/irrelevant.
-Do not include any other text. JSON only.
-`.trim();
-
-async function llmImpactScore(text) {
-  // אם אין ספק/מפתח — לא מפעילים
-  if (MODEL_PROVIDER === "openai" && OPENAI_API_KEY) {
-    try {
-      const resp = await axios.post(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          model: OPENAI_MODEL,
-          temperature: 0.1,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: `Posts:\n${text}` },
-          ],
-        },
-        { headers: { Authorization: `Bearer ${OPENAI_API_KEY}` }, timeout: 15000 }
-      );
-      const raw = resp.data?.choices?.[0]?.message?.content || "{}";
-      const parsed = JSON.parse(raw);
-      const level = String(parsed.level || "").toLowerCase();
-      const reason = String(parsed.reason || "").slice(0, 180);
-      if (!["none","low","medium","high"].includes(level)) return null;
-      return { level, reason };
-    } catch (e) {
-      console.error("⚠️ LLM(OpenAI) error:", e?.response?.data || e.message);
-      return null;
+Return EXACTLY one of the following options (no extra text):
+❌ No Impact
+⚠️ Basic Impact
+🚨 High Impact
+`
+                }
+              ]
+            }
+          ]
+        }),
+      }
+    );
+    const data = await resp.json();
+    const out = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!out) {
+      return "⚠️ Gemini: " + (data?.error?.message || "No result");
     }
-  } else if (MODEL_PROVIDER === "anthropic" && ANTHROPIC_API_KEY) {
-    try {
-      const resp = await axios.post(
-        "https://api.anthropic.com/v1/messages",
-        {
-          model: ANTHROPIC_MODEL,
-          max_tokens: 200,
-          temperature: 0.1,
-          system: SYSTEM_PROMPT,
-          messages: [{ role: "user", content: `Posts:\n${text}` }],
-        },
-        {
-          headers: {
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-          },
-          timeout: 15000,
-        }
-      );
-      const content = resp.data?.content?.[0]?.text || "{}";
-      const parsed = JSON.parse(content);
-      const level = String(parsed.level || "").toLowerCase();
-      const reason = String(parsed.reason || "").slice(0, 180);
-      if (!["none","low","medium","high"].includes(level)) return null;
-      return { level, reason };
-    } catch (e) {
-      console.error("⚠️ LLM(Anthropic) error:", e?.response?.data || e.message);
-      return null;
+    // נוודא שזה אחד הערכים
+    if (["❌ No Impact", "⚠️ Basic Impact", "🚨 High Impact"].includes(out)) {
+      return out;
     }
-  } else {
-    // ספק לא קונפג — מדלגים
-    return null;
+    return "⚠️ Gemini: " + out;
+  } catch (err) {
+    return "⚠️ Gemini error: " + err.message;
   }
 }
 
-// ----------- Routes -----------
+// בונים הודעת טלגרם יפה
+async function buildTelegramMessage({ source, account, created, text, url, keyword }) {
+  const risk = await getRiskScoring(text);
+  const safeText = htmlEscape(text);
+  const srcIcon = source === "truth" ? "📣 Truth Social" : source === "twitter" ? "🐦 X" : "📰 Source";
+  const when = created ? `<i>${htmlEscape(created)}</i>\n` : "";
+  const handle = account ? `<b>@${htmlEscape(account)}</b>\n` : "";
+  const kw = keyword ? `<code>#${htmlEscape(keyword)}</code>\n` : "";
+  const link = url ? `<a href="${htmlEscape(url)}">Link</a>` : "";
 
-// Health
+  return (
+    `🔔 <b>Keyword cross-hit</b>\n` +
+    `${kw}${srcIcon}\n` +
+    handle +
+    when +
+    `${safeText}\n\n` +
+    `${link}\n\n` +
+    `Impact: ${risk}`
+  );
+}
+
+// כאשר יש לנו צבירה של ≥2 חשבונות עבור מילה מסוימת—נשלח סיכום קצר
+async function maybeSendSummary(keywordLc) {
+  const arr = recentByKeyword.get(keywordLc) || [];
+  const accounts = uniq(arr.map(x => x.account || "unknown")).filter(Boolean);
+  if (accounts.length < MIN_ACCOUNTS) return;
+
+  // נבחר את הפריט הכי “חדש” ל-message הראשי
+  const latest = arr.slice().sort((a, b) => b.ts - a.ts)[0];
+
+  const msg = await buildTelegramMessage({
+    source: latest.source,
+    account: latest.account,
+    created: latest.created,
+    text: latest.text,
+    url: latest.url,
+    keyword: keywordLc,
+  });
+
+  await sendTelegram(msg);
+}
+
+// ------- Web server routes -------
+
+// דף בית קצר
+app.get("/", (req, res) => {
+  res.type("text/plain").send("OK - Alert bot is running.\nSee /health, /debug");
+});
+
+// בריאות
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    service: "alert-bot",
     time: new Date().toISOString(),
-    hasTelegram: Boolean(TELEGRAM_TOKEN && TELEGRAM_CHAT_ID),
-    llm: {
-      provider: MODEL_PROVIDER || "disabled",
-      openai: Boolean(OPENAI_API_KEY),
-      anthropic: Boolean(ANTHROPIC_API_KEY),
-    },
+    window_sec: Number(WINDOW_SEC),
+    min_unique_accounts: MIN_ACCOUNTS,
+    keywords_count: KEYWORDS_LIST.length,
   });
 });
 
-// Debug
+// דיבאג (לא חושף סודות!)
 app.get("/debug", (req, res) => {
-  const w = {};
-  for (const [kw, obj] of windowStore.entries()) {
-    w[kw] = {
-      uniqueAccounts: obj.accounts.size,
-      ageSec: Math.round((Date.now() - obj.firstAt) / 1000),
-      lastUpdateSec: Math.round((Date.now() - obj.lastAt) / 1000),
-      samples: obj.samples.map((s) => ({
-        id: s._id,
-        account: s._account,
-        textPreview: (s._text || "").slice(0, 120),
-      })),
-    };
-  }
   res.json({
     ok: true,
     env: {
-      port: PORT,
-      keywords: KEYWORDS,
-      windowSec: WINDOW_SEC,
-      minUniqueAccounts: MIN_UNIQUE_ACCOUNTS,
-      maxItemsFetch: MAX_ITEMS_FETCH,
-      hasTelegram: Boolean(TELEGRAM_TOKEN && TELEGRAM_CHAT_ID),
-      hasApifySecret: Boolean(APIFY_WEBHOOK_SECRET),
-      llmProvider: MODEL_PROVIDER || "disabled",
+      TELEGRAM_BOT_TOKEN: TELEGRAM_BOT_TOKEN ? "set" : "missing",
+      TELEGRAM_CHAT_ID: TELEGRAM_CHAT_ID ? "set" : "missing",
+      RISK_SCORING,
+      GEMINI_API_KEY: GEMINI_API_KEY ? "set" : "missing",
+      APIFY_WEBHOOK_SECRET: APIFY_WEBHOOK_SECRET ? "set" : "missing",
+      KEYWORDS: KEYWORDS_LIST,
+      WINDOW_SEC: Number(WINDOW_SEC),
+      MIN_UNIQUE_ACCOUNTS: MIN_ACCOUNTS,
     },
-    store: w,
+    memory: {
+      recentByKeywordSize: recentByKeyword.size,
+      sentIdsSize: sentIds.size,
+    },
+    now: new Date().toISOString(),
   });
 });
 
-// Send test Telegram
+// בדיקת טלגרם ידנית
 app.get("/test/telegram", async (req, res) => {
-  const msg = req.query.msg || "בדיקת טלגרם ✅";
-  await sendTelegram(`<b>Test</b>\n${fmtHtmlSafe(String(msg))}`);
-  res.json({ ok: true, sent: true });
+  const text = req.query.text || "בדיקת בוט ✅";
+  const r = await sendTelegram(`Test: ${htmlEscape(text)}\n\nTime: ${new Date().toISOString()}`);
+  res.json({ ok: true, result: r || null });
 });
 
-// Test LLM scoring
-app.get("/test/score", async (req, res) => {
-  const text = String(req.query.text || "").slice(0, 1000);
-  if (!text) return res.status(400).json({ ok: false, error: "missing text" });
-  const score = await llmImpactScore(text);
-  res.json({ ok: true, score: score || { level: "n/a", reason: "no-llm-or-error" } });
-});
-
-// Simulate error for monitoring
-app.get("/simulate-error", (req, res) => {
-  const code = Number(req.query.code || 500);
-  const reason = String(req.query.reason || "manual_test_error");
-  console.error(`❌ simulate-error: code=${code} reason=${reason}`);
-  res.status(code).json({ ok: false, code, reason });
-});
-
-// Apify Webhook
-app.post("/webhook/apify", async (req, res) => {
+// נקודת Webhook לאפיפיי / משימות אחרות
+// שימוש: https://<your-domain>/apify/webhook?secret=MYSECRET&source=twitter
+app.post("/apify/webhook", async (req, res) => {
   try {
-    const sigHeader =
-      req.header("x-apify-signature") || req.header("X-Apify-Signature");
-    const rawBody = req.body; // Buffer
-    const verified = APIFY_WEBHOOK_SECRET
-      ? hmacEquals(sigHeader, rawBody, APIFY_WEBHOOK_SECRET)
-      : true;
-
-    if (!verified) {
-      console.warn("⚠️ חתימת Webhook לא אומתה");
-      return res.status(401).json({ ok: false, error: "invalid_signature" });
+    // אימות סוד
+    const given = String(req.query.secret || "");
+    if (!APIFY_WEBHOOK_SECRET || given !== APIFY_WEBHOOK_SECRET) {
+      return res.status(401).json({ ok: false, error: "Bad secret" });
     }
 
-    let payload;
-    try {
-      payload = JSON.parse(rawBody.toString("utf8"));
-    } catch (e) {
-      console.error("❌ Webhook JSON parse error:", e.message);
-      return res.status(400).json({ ok: false, error: "invalid_json" });
+    // מקור (twitter | truth | other)
+    const source = String(req.query.source || "other").toLowerCase();
+
+    // אפיפיי שולחת בדרך כלל body עם שדה data / items / או webhookPayload
+    // ננסה להוציא מערך פריטים בצורה סלחנית
+    const body = req.body || {};
+    const items =
+      body.items ||
+      body.data ||
+      body.results ||
+      body?.webhookPayload?.items ||
+      (Array.isArray(body) ? body : []);
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.json({ ok: true, received: 0 });
     }
 
-    const sourceTag =
-      payload?.actorId || payload?.actorRunId || payload?.eventType || "Apify";
+    // ננקה חלון ישן
+    cleanupOldWindow();
 
-    let items =
-      payload?.items ||
-      payload?.results ||
-      payload?.data?.items ||
-      payload?.data ||
-      [];
-    if (!Array.isArray(items)) items = [];
-    if (items.length > MAX_ITEMS_FETCH) items = items.slice(0, MAX_ITEMS_FETCH);
+    let processed = 0;
+    for (const raw of items) {
+      const it = normalizeItem(raw);
+      if (!it.text) continue;
 
-    let triggers = 0;
+      // דה-דופ
+      const hash = crypto
+        .createHash("md5")
+        .update(it.id || it.account + it.text)
+        .digest("hex");
+      if (sentIds.has(hash)) continue;
+      sentIds.add(hash);
 
-    for (const it of items) {
-      const id =
-        it.id ||
-        it.tweet_id ||
-        it.tweetId ||
-        it.postId ||
-        it.uniqueId ||
-        it.url ||
-        it.link ||
-        crypto.createHash("md5").update(JSON.stringify(it)).digest("hex");
+      // התאמות מילות מפתח
+      const hits = extractMatchedKeywords(it.text);
+      if (hits.length === 0) continue;
 
-      if (seenIds.has(id)) continue;
-      seenIds.add(id);
-
-      const text =
-        it.text || it.content || it.full_text || it.title || it.body || "";
-      const hits = matchKeywords(text);
-      if (!hits.length) continue;
-
-      const account =
-        it.username || it.screen_name || it.account || it.author || "unknown";
-
-      const sample = { _id: id, _text: text, _account: account };
-
+      // לכל מילת מפתח—נרשום אירוע
       for (const kw of hits) {
-        const distinct = pushToWindow(kw, account, sample);
-        if (distinct >= MIN_UNIQUE_ACCOUNTS) {
-          const group = windowStore.get(kw);
-          const uCount = group?.accounts?.size || distinct;
-
-          // --- LLM scoring on aggregated sample ---
-          const plain = samplesToPlainText(group?.samples || [sample]);
-          const score = await llmImpactScore(plain); // may be null
-
-          const impactLine = score
-            ? `${formatImpactLabel(score.level)} — <i>${fmtHtmlSafe(score.reason)}</i>`
-            : `⚪️ ללא שיפוט (LLM לא זמין)`;
-
-          const title = `🚨 התאמה מרובה: "${kw}" הופיע אצל ${uCount} חשבונות ב-${WINDOW_SEC} שניות`;
-          const samplesHtml = (group?.samples || [])
-            .slice(0, 3)
-            .map((s) => {
-              const safe = fmtHtmlSafe(s._text || "").slice(0, 240);
-              return `• <b>@${fmtHtmlSafe(s._account)}</b>: ${safe}`;
-            })
-            .join("\n");
-
-          const html =
-            `<b>${title}</b>\n\n` +
-            `${samplesHtml || "(ללא דוגמאות)"}\n\n` +
-            `<b>הערכת השפעה:</b> ${impactLine}\n` +
-            `<i>מקור: ${fmtHtmlSafe(sourceTag)}</i>`;
-
-          await sendTelegram(html);
-
-          windowStore.delete(kw);
-          triggers++;
+        const entry = {
+          account: it.account || "unknown",
+          text: it.text,
+          url: it.url,
+          created: it.created,
+          ts: nowTs(),
+          source,
+        };
+        const crossed = registerAndCheck(kw, entry);
+        if (crossed) {
+          await maybeSendSummary(kw);
         }
       }
+
+      processed++;
     }
 
-    console.log(`✅ Webhook: items=${items.length}, triggers=${triggers}, source=${sourceTag}`);
-    return res.json({ ok: true, items: items.length, triggers });
+    return res.json({ ok: true, processed });
   } catch (err) {
-    console.error("❌ Webhook handler error:", err.message);
-    return res.status(500).json({ ok: false, error: "internal_error" });
+    console.error("Webhook error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// Home
-app.get("/", (req, res) => {
-  res.send("Alert bot is up. Try /health, /debug, /test/telegram, /test/score.");
-});
-
+// ------- Start -------
 app.listen(PORT, () => {
-  console.log(`✅ Webhook bot running on :${PORT}`);
+  console.log(`🚀 Webhook bot running on :${PORT}`);
 });
