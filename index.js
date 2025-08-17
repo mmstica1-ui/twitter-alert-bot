@@ -7,6 +7,15 @@ import express from "express";
 import crypto from "crypto";
 import cors from "cors";
 import { collectNewsFromAllSources, startNewsPolling, filterNewsByKeywords } from './news-sources.js';
+import { 
+  tradingMemory, 
+  ibkrTrader, 
+  monitorSpecificTwitterAccounts, 
+  TradingControls,
+  TRADING_CONFIG,
+  sendTradingAlert,
+  executeTradingSignal
+} from './trading-system.js';
 
 // ------- ENV -------
 const {
@@ -25,6 +34,19 @@ const {
   ENABLE_RSS = "true",             // איסוף מ-RSS feeds
   ENABLE_POLLING = "true",         // איסוף תקופתי
   POLLING_INTERVAL = "5",          // דקות בין איסופים
+
+  // Trading System (CRITICAL FOR REAL MONEY)
+  TWITTER_ACCOUNT_1,               // First Twitter account to monitor
+  TWITTER_ACCOUNT_2,               // Second Twitter account to monitor  
+  IBKR_HOST = "localhost",         // IBKR Gateway host
+  IBKR_PORT = "5000",              // IBKR Gateway port
+  IBKR_ACCOUNT_ID,                 // IBKR account ID
+  IBKR_CLIENT_ID = "1",            // IBKR client ID
+  SPX_CONTRACT_SIZE = "1",         // Number of SPX contracts
+  OPTION_TYPE = "CALL",            // CALL or PUT
+  MAX_DAILY_LOSS = "5000",         // Max daily loss in USD
+  DRY_RUN = "true",                // Safety: start in dry run mode
+  REQUIRE_CONFIRMATION = "false",   // Require confirmation for trades
 
   // Keywords and rules  
   KEYWORDS = "tariff,tariffs,breaking,fed,interest rates,inflation,earnings,stock,market,trading,SEC,regulation,sanctions,trade war,merger,acquisition,ipo,crypto,bitcoin,ethereum",
@@ -666,6 +688,126 @@ app.get("/analyze/text", async (req, res) => {
   }
 });
 
+// ===== TRADING ENDPOINTS =====
+
+// Trading status and controls
+app.get("/trading/status", (req, res) => {
+  res.json({
+    ok: true,
+    trading_status: TradingControls.getStatus(),
+    config: {
+      monitored_accounts: TRADING_CONFIG.MONITORED_ACCOUNTS,
+      poll_interval: TRADING_CONFIG.POLL_INTERVAL_MS,
+      spx_config: TRADING_CONFIG.SPX_OPTIONS,
+      safety: TRADING_CONFIG.SAFETY
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Enable/Disable trading
+app.post("/trading/toggle", (req, res) => {
+  const { enable } = req.body;
+  
+  if (enable) {
+    TradingControls.enableTrading();
+  } else {
+    TradingControls.disableTrading();
+  }
+  
+  res.json({
+    ok: true,
+    trading_enabled: enable,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Set dry run mode
+app.post("/trading/dry-run", (req, res) => {
+  const { enabled = true } = req.body;
+  TradingControls.setDryRun(enabled);
+  
+  res.json({
+    ok: true,
+    dry_run: enabled,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Test IBKR connection
+app.get("/trading/test-connection", async (req, res) => {
+  try {
+    const connected = await ibkrTrader.connect();
+    const spxPrice = connected ? await ibkrTrader.getCurrentSPXPrice() : null;
+    
+    res.json({
+      ok: true,
+      ibkr_connected: connected,
+      spx_price: spxPrice,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Manual trade execution (for testing)
+app.post("/trading/manual-trade", async (req, res) => {
+  try {
+    const { keyword = "manual_test", accounts = ["manual"] } = req.body;
+    
+    const mockCrossMatch = {
+      keyword,
+      accounts,
+      confidence: 1.0,
+      timestamp: Date.now()
+    };
+    
+    const result = await executeTradingSignal(mockCrossMatch);
+    
+    if (result.error) {
+      return res.status(500).json({
+        ok: false,
+        error: result.error,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Send mobile alert
+    await sendTradingAlert(result);
+    
+    res.json({
+      ok: true,
+      trade_result: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get trading history
+app.get("/trading/history", (req, res) => {
+  const { limit = 50 } = req.query;
+  const history = tradingMemory.orderHistory.slice(-limit);
+  
+  res.json({
+    ok: true,
+    total_orders: tradingMemory.orderHistory.length,
+    history,
+    daily_stats: tradingMemory.dailyStats,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // נקודת Webhook לאפיפיי / משימות אחרות
 // שימוש: https://<your-domain>/apify/webhook?secret=MYSECRET&source=twitter
 app.post("/apify/webhook", async (req, res) => {
@@ -709,7 +851,23 @@ app.post("/apify/webhook", async (req, res) => {
       if (sentIds.has(hash)) continue;
       sentIds.add(hash);
 
-      // התאמות מילות מפתח
+      // CRITICAL: Check if this is from a monitored trading account
+      const isMonitoredAccount = TRADING_CONFIG.MONITORED_ACCOUNTS.includes(it.account);
+      
+      if (isMonitoredAccount) {
+        console.log(`🎯 MONITORED ACCOUNT TWEET: @${it.account} - "${it.text}"`);
+        
+        // Process through trading system for cross-match detection
+        const twitterMonitor = await monitorSpecificTwitterAccounts();
+        twitterMonitor.processTweet(it.account, {
+          text: it.text,
+          url: it.url,
+          created: it.created,
+          id: it.id
+        });
+      }
+
+      // Continue with normal processing
       const hits = extractMatchedKeywords(it.text);
       if (hits.length === 0) continue;
 
