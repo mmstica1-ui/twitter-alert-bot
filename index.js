@@ -59,56 +59,31 @@ async function tgSendWithButtons(html, alertId) {
         [
           {
             text: "🟢 BUY CALL (+0.5%)",
-            callback_data: JSON.stringify({
-              action: "trade",
-              side: "CALL",
-              alertId: alertId,
-              distance: 0.5
-            })
+            callback_data: `trade_CALL_${alertId}_0.5`
           },
           {
             text: "🔴 BUY PUT (-0.5%)",
-            callback_data: JSON.stringify({
-              action: "trade", 
-              side: "PUT",
-              alertId: alertId,
-              distance: 0.5
-            })
+            callback_data: `trade_PUT_${alertId}_0.5`
           }
         ],
         [
           {
             text: "💰 $10K CALL",
-            callback_data: JSON.stringify({
-              action: "trade",
-              side: "CALL", 
-              alertId: alertId,
-              budget: 10000
-            })
+            callback_data: `trade_CALL_${alertId}_10000`
           },
           {
             text: "💸 $10K PUT",
-            callback_data: JSON.stringify({
-              action: "trade",
-              side: "PUT",
-              alertId: alertId, 
-              budget: 10000
-            })
+            callback_data: `trade_PUT_${alertId}_10000`
           }
         ],
         [
           {
             text: "📊 SPX Price",
-            callback_data: JSON.stringify({
-              action: "price"
-            })
+            callback_data: "spx_price"
           },
           {
             text: "📈 Market Analysis", 
-            callback_data: JSON.stringify({
-              action: "analysis",
-              alertId: alertId
-            })
+            callback_data: `analysis_${alertId}`
           }
         ]
       ]
@@ -170,45 +145,27 @@ async function tgSendWithTradeButtons(html, tradeData) {
         [
           {
             text: "✅ CONFIRM TRADE",
-            callback_data: JSON.stringify({
-              action: "confirm_trade",
-              tradeId: tradeData.id,
-              side: tradeData.side,
-              strike: tradeData.suggestedStrike
-            })
+            callback_data: `confirm_${tradeData.id}`
           },
           {
             text: "❌ CANCEL",
-            callback_data: JSON.stringify({
-              action: "cancel_trade",
-              tradeId: tradeData.id
-            })
+            callback_data: `cancel_${tradeData.id}`
           }
         ],
         [
           {
             text: "📊 Current SPX Price",
-            callback_data: JSON.stringify({
-              action: "spx_price"
-            })
+            callback_data: "spx_price"
           },
           {
             text: "⚙️ Modify Trade",
-            callback_data: JSON.stringify({
-              action: "modify_trade", 
-              tradeId: tradeData.id
-            })
+            callback_data: `modify_${tradeData.id}`
           }
         ],
         [
           {
             text: "💡 Strategy Analysis",
-            callback_data: JSON.stringify({
-              action: "strategy_analysis",
-              side: tradeData.side,
-              strike: tradeData.suggestedStrike,
-              spot: tradeData.currentSpot
-            })
+            callback_data: `strategy_${tradeData.id}`
           }
         ]
       ]
@@ -760,47 +717,55 @@ app.post("/telegram/webhook", async (req, res) => {
     // טיפול בלחיצות על כפתורים (callback_query)
     if (update.callback_query) {
       const callbackQuery = update.callback_query;
-      const data = JSON.parse(callbackQuery.data);
+      const data = callbackQuery.data;
       const chatId = callbackQuery.message.chat.id;
       
-      console.log(`🔘 Button pressed: ${data.action}`);
+      console.log(`🔘 Button pressed: ${data}`);
       
       let responseText = "";
       
-      switch (data.action) {
-        case "trade":
-          const currentPrice = await getCurrentSPXPrice();
-          const strike = calculateStrike(currentPrice, data.side, data.distance || 0.5);
-          const budget = data.budget || 10000;
-          
-          responseText = `🎯 <b>${data.side} Trade Prepared</b>\n\nSPX: $${currentPrice}\nStrike: ${strike}\nBudget: $${budget.toLocaleString()}\n\n<i>Use /trade endpoint for execution</i>`;
-          break;
-          
-        case "price":
-          const spxPrice = await getCurrentSPXPrice();
-          const expiry = getNextExpiry();
-          responseText = `📊 <b>Current SPX Price</b>\n\nPrice: <b>$${spxPrice.toLocaleString()}</b>\nNext Expiry: <b>${expiry.date} (${expiry.dte})</b>\nTime: ${new Date().toISOString()}`;
-          break;
-          
-        case "analysis":
-          responseText = `📈 <b>Market Analysis</b>\n\nBased on Alert #${data.alertId}\n\n• Monitor price action around key levels\n• Watch for volume confirmation\n• Consider risk management\n\n<i>This is general guidance only</i>`;
-          break;
-          
-        case "confirm_trade":
-          responseText = `✅ <b>Trade Confirmed</b>\n\nTrade ID: ${data.tradeId}\n${data.side} ${data.strike}\n\n⚠️ <b>PREVIEW MODE</b>\nConnect IBKR for live execution`;
-          break;
-          
-        case "cancel_trade":
-          responseText = `❌ <b>Trade Cancelled</b>\n\nTrade ID: ${data.tradeId} cancelled successfully`;
-          break;
-          
-        case "spx_price":
-          const price = await getCurrentSPXPrice();
-          responseText = `📊 <b>Live SPX Price</b>\n\n<b>$${price.toLocaleString()}</b>\n\nUpdated: ${new Date().toLocaleString()}`;
-          break;
-          
-        default:
-          responseText = `❓ Unknown action: ${data.action}`;
+      // פענוח callback data פשוט
+      if (data.startsWith('trade_')) {
+        // Format: trade_SIDE_alertId_budget/distance
+        const parts = data.split('_');
+        const side = parts[1];
+        const alertId = parts[2]; 
+        const value = parts[3];
+        
+        const currentPrice = await getCurrentSPXPrice();
+        const isBudget = parseInt(value) > 10; // אם זה מספר גדול, זה budget
+        const strike = calculateStrike(currentPrice, side, 0.5);
+        
+        responseText = `🎯 <b>${side} Trade Ready</b>\n\n📊 SPX: <b>$${currentPrice.toLocaleString()}</b>\n🎯 Strike: <b>${strike}</b> (0.5% OTM)\n💰 ${isBudget ? `Budget: $${parseInt(value).toLocaleString()}` : `Distance: ${value}%`}\n⏰ Next Expiry: <b>${getNextExpiry().dte}</b>\n\n<i>💡 Ready for execution via trading panel</i>`;
+        
+      } else if (data === 'spx_price') {
+        const spxPrice = await getCurrentSPXPrice();
+        const expiry = getNextExpiry();
+        responseText = `📊 <b>Live SPX Price</b>\n\n💰 <b>$${spxPrice.toLocaleString()}</b>\n📅 Next Expiry: <b>${expiry.date} (${expiry.dte})</b>\n🕒 Updated: ${new Date().toLocaleTimeString()}`;
+        
+      } else if (data.startsWith('analysis_')) {
+        const alertId = data.split('_')[1];
+        responseText = `📈 <b>Quick Market Analysis</b>\n\n🎯 Alert #${alertId}\n\n• <b>Key Levels:</b> Watch SPX support/resistance\n• <b>Volume:</b> Confirm with options flow\n• <b>Risk:</b> Size positions appropriately\n• <b>Time:</b> Monitor near expiry\n\n<i>⚠️ For educational purposes only</i>`;
+        
+      } else if (data.startsWith('confirm_')) {
+        const tradeId = data.split('_')[1];
+        responseText = `✅ <b>Trade Confirmed</b>\n\n📋 Trade ID: <code>${tradeId}</code>\n\n⚠️ <b>PREVIEW MODE ACTIVE</b>\n🔗 Connect IBKR Gateway for live execution\n\n<i>Trade parameters saved for execution</i>`;
+        
+      } else if (data.startsWith('cancel_')) {
+        const tradeId = data.split('_')[1];
+        responseText = `❌ <b>Trade Cancelled</b>\n\n📋 Trade ID: <code>${tradeId}</code>\n✅ Successfully cancelled\n\n<i>No action taken</i>`;
+        
+      } else if (data.startsWith('modify_')) {
+        const tradeId = data.split('_')[1];
+        responseText = `⚙️ <b>Trade Modification</b>\n\n📋 Trade ID: <code>${tradeId}</code>\n\n💡 To modify trade parameters:\n• Use the web trading panel\n• Adjust strike distance\n• Change position size\n• Update expiry selection`;
+        
+      } else if (data.startsWith('strategy_')) {
+        const tradeId = data.split('_')[1];
+        const spxPrice = await getCurrentSPXPrice();
+        responseText = `💡 <b>Strategy Analysis</b>\n\n📊 Current SPX: <b>$${spxPrice.toLocaleString()}</b>\n\n📈 <b>Market Outlook:</b>\n• Volatility: Monitor VIX levels\n• Support/Resistance: Key technical levels\n• Time Decay: Theta considerations\n• Delta: Position sensitivity\n\n⚠️ <i>Educational analysis only</i>`;
+        
+      } else {
+        responseText = `❓ Unknown button: ${data}`;
       }
       
       // שליחת תשובה למשתמש
