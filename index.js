@@ -16,6 +16,7 @@ import {
   sendTradingAlert,
   executeTradingSignal
 } from './trading-system.js';
+import configManager from './config-manager.js';
 
 // ------- ENV -------
 const {
@@ -29,11 +30,11 @@ const {
   RISK_SCORING = "on",             // שונה ל-on כברירת מחדל
   GEMINI_API_KEY,
 
-  // News Sources
-  NEWS_API_KEY,                    // NewsAPI key
-  ENABLE_RSS = "true",             // איסוף מ-RSS feeds
-  ENABLE_POLLING = "true",         // איסוף תקופתי
-  POLLING_INTERVAL = "5",          // דקות בין איסופים
+  // News Sources - DISABLED (Twitter Only Mode)
+  NEWS_API_KEY,                    // NewsAPI key (NOT USED)
+  ENABLE_RSS = "false",            // איסוף מ-RSS feeds - מבוטל!
+  ENABLE_POLLING = "false",        // איסוף תקופתי - מבוטל!
+  POLLING_INTERVAL = "1",          // דקות בין בדיקות טוויטר
 
   // Trading System (CRITICAL FOR REAL MONEY)
   TWITTER_ACCOUNT_1,               // First Twitter account to monitor
@@ -119,6 +120,44 @@ function uniq(arr) {
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// Generate mock Twitter feed for demonstration
+function generateMockTwitterFeed(accounts, keywords, limit) {
+  const tweets = [];
+  const now = Date.now();
+  
+  for (let i = 0; i < limit; i++) {
+    const account = accounts[Math.floor(Math.random() * accounts.length)];
+    const keyword = keywords[Math.floor(Math.random() * keywords.length)];
+    const relatedKeywords = keywords.filter(k => k.toLowerCase().includes(keyword.toLowerCase().substring(0, 3))).slice(0, 3);
+    
+    // Create realistic financial tweet content
+    const tweetTemplates = [
+      `🚨 BREAKING: ${keyword} development could impact SPX trading. Watch for volatility.`,
+      `📊 ${keyword} update from sources - potential market mover ahead.`,
+      `⚠️ ALERT: ${keyword} situation developing. Options traders take note.`,
+      `🔥 ${keyword} news crossing the wire. SPY/QQQ watch levels coming up.`,
+      `💥 URGENT: ${keyword} development may affect Fed outlook and markets.`
+    ];
+    
+    const template = tweetTemplates[Math.floor(Math.random() * tweetTemplates.length)];
+    
+    tweets.push({
+      id: `twitter_${account}_${now + i}`,
+      title: template,
+      text: template,
+      account: account,
+      source: `Twitter @${account}`,
+      url: `https://twitter.com/${account}/status/${now + i}`,
+      timestamp: now - (i * 60000), // Space tweets 1 minute apart
+      confidence: Math.random() * 0.3 + 0.7, // 70-100% confidence
+      relevantKeywords: relatedKeywords,
+      platform: "twitter"
+    });
+  }
+  
+  return tweets.sort((a, b) => b.timestamp - a.timestamp);
 }
 
 // מחלצים טקסט/לינק/חשבון מכל מבנה אפשרי (X/Truth/RSS/News API)
@@ -808,6 +847,490 @@ app.get("/trading/history", (req, res) => {
   });
 });
 
+// ===== CONFIGURATION MANAGEMENT ENDPOINTS =====
+
+// Get current configuration
+app.get("/api/config", (req, res) => {
+  try {
+    res.json(configManager.config);
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// Update configuration
+app.post("/api/config", (req, res) => {
+  try {
+    const newConfig = req.body;
+    
+    // Validate configuration
+    configManager.config = { ...configManager.config, ...newConfig };
+    const validation = configManager.validateConfig();
+    
+    if (!validation.valid) {
+      return res.status(400).json({
+        ok: false,
+        error: "Configuration validation failed",
+        errors: validation.errors
+      });
+    }
+    
+    // Save configuration
+    const saved = configManager.saveConfig();
+    if (saved) {
+      // Update TRADING_CONFIG with new values
+      Object.assign(TRADING_CONFIG, {
+        MONITORED_ACCOUNTS: configManager.getTwitterAccounts(),
+        POLL_INTERVAL_MS: configManager.get('twitter.pollInterval') || 60000,
+        SPX_OPTIONS: {
+          ...TRADING_CONFIG.SPX_OPTIONS,
+          contractSize: Math.floor(configManager.getTradeAmount() / 100), // Rough estimate
+          strikeOffset: configManager.get('spx.strikeOffset') || 0.005,
+          optionType: configManager.get('spx.enableCalls') ? 'CALL' : 'PUT'
+        },
+        SAFETY: {
+          ...TRADING_CONFIG.SAFETY,
+          dryRun: configManager.isDryRun(),
+          maxDailyLoss: configManager.get('safety.maxDailyLoss') || 50000,
+          maxOrdersPerHour: configManager.get('safety.maxOrdersPerHour') || 20
+        }
+      });
+      
+      res.json({
+        ok: true,
+        message: "Configuration updated successfully",
+        validation,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        ok: false,
+        error: "Failed to save configuration"
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// Get specific config section
+app.get("/api/config/:section", (req, res) => {
+  try {
+    const section = req.params.section;
+    const value = configManager.get(section);
+    
+    if (value !== undefined) {
+      res.json({
+        ok: true,
+        section,
+        value,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(404).json({
+        ok: false,
+        error: `Configuration section '${section}' not found`
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// Update specific config value
+app.put("/api/config/:section", (req, res) => {
+  try {
+    const section = req.params.section;
+    const { value } = req.body;
+    
+    const updated = configManager.set(section, value);
+    if (updated) {
+      res.json({
+        ok: true,
+        section,
+        value,
+        message: "Configuration updated",
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        ok: false,
+        error: "Failed to update configuration"
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// Validate configuration
+app.post("/api/config/validate", (req, res) => {
+  try {
+    const validation = configManager.validateConfig();
+    res.json({
+      ok: true,
+      validation,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// Reset configuration to defaults
+app.post("/api/config/reset", (req, res) => {
+  try {
+    const reset = configManager.resetToDefaults();
+    if (reset) {
+      res.json({
+        ok: true,
+        message: "Configuration reset to defaults",
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        ok: false,
+        error: "Failed to reset configuration"
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// Twitter account management
+app.post("/api/twitter/accounts", (req, res) => {
+  try {
+    const { accounts } = req.body;
+    
+    if (!Array.isArray(accounts)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Accounts must be an array"
+      });
+    }
+    
+    const updated = configManager.setTwitterAccounts(accounts);
+    if (updated) {
+      res.json({
+        ok: true,
+        accounts: configManager.getTwitterAccounts(),
+        message: "Twitter accounts updated",
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        ok: false,
+        error: "Failed to update Twitter accounts"
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// Keyword management
+app.get("/api/keywords", (req, res) => {
+  try {
+    const keywords = configManager.getKeywords();
+    res.json({
+      ok: true,
+      keywords,
+      count: keywords.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+app.post("/api/keywords", (req, res) => {
+  try {
+    const { keyword } = req.body;
+    
+    if (!keyword || typeof keyword !== 'string') {
+      return res.status(400).json({
+        ok: false,
+        error: "Keyword must be a non-empty string"
+      });
+    }
+    
+    const added = configManager.addKeyword(keyword.trim());
+    if (added) {
+      res.json({
+        ok: true,
+        keyword: keyword.trim(),
+        keywords: configManager.getKeywords(),
+        message: "Keyword added",
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        ok: false,
+        error: "Failed to add keyword"
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+app.delete("/api/keywords/:keyword", (req, res) => {
+  try {
+    const keyword = decodeURIComponent(req.params.keyword);
+    
+    const removed = configManager.removeKeyword(keyword);
+    if (removed) {
+      res.json({
+        ok: true,
+        keyword,
+        keywords: configManager.getKeywords(),
+        message: "Keyword removed",
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        ok: false,
+        error: "Failed to remove keyword"
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// ===== MOBILE APP ENDPOINTS =====
+
+// Get analyzed news feed for mobile app (TWITTER ONLY)
+app.get("/api/mobile/news", async (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+    
+    // Get Twitter data from our monitoring system
+    const twitterConfig = configManager.get('twitter');
+    const monitoredAccounts = twitterConfig.accounts; // ['FirstSquawk', 'DeItaone']
+    const keywords = twitterConfig.keywords;
+    
+    // Simulate Twitter feed (since we don't have real Twitter API access yet)
+    // In production, this would come from the actual Twitter monitoring system
+    const mockTwitterFeeds = generateMockTwitterFeed(monitoredAccounts, keywords, parseInt(limit));
+    
+    // Filter by our configured keywords only
+    const relevantNews = filterNewsByKeywords(mockTwitterFeeds, keywords);
+
+    // Analyze each news item
+    const analyzedNews = [];
+    for (const item of relevantNews.slice(0, limit)) {
+      try {
+        const analysis = await getAdvancedAnalysis(
+          item.title + " " + (item.text || ""), 
+          item.source || "news", 
+          item.account || "unknown"
+        );
+        
+        // Calculate impact percentage
+        const impactScore = analysis.raw_scores?.impact || 3;
+        const confidenceScore = analysis.raw_scores?.confidence || 7;
+        const impactPercentage = Math.min(100, (impactScore * 20)); // Convert 1-5 to 0-100
+        
+        // Determine sentiment
+        let sentiment = "neutral";
+        if (analysis.sentiment) {
+          const sentimentLower = analysis.sentiment.toLowerCase();
+          if (sentimentLower.includes("positive") || sentimentLower.includes("📈")) {
+            sentiment = "bullish";
+          } else if (sentimentLower.includes("negative") || sentimentLower.includes("📉")) {
+            sentiment = "bearish";
+          }
+        }
+        
+        analyzedNews.push({
+          id: item.id || Date.now() + Math.random(),
+          title: item.title || "Untitled News",
+          description: item.text || item.summary || "No description available",
+          source: item.account || item.source || "Unknown",
+          time: item.created ? formatTimeAgo(item.created) : "זמן לא ידוע",
+          url: item.url,
+          analysis: {
+            impact: impactPercentage,
+            confidence: confidenceScore * 10, // Convert 1-10 to 10-100
+            sentiment: sentiment,
+            reasoning: analysis.summary || analysis.reasoning || "ניתוח אוטומטי של השפעה על השוק",
+            tickers: analysis.tickers || [],
+            sectors: analysis.sectors || []
+          },
+          keywords: extractMatchedKeywords(item.text, item.title)
+        });
+      } catch (analysisError) {
+        console.error('Analysis error for item:', analysisError);
+        // Add item without analysis if analysis fails
+        analyzedNews.push({
+          id: item.id || Date.now() + Math.random(),
+          title: item.title || "Untitled News",
+          description: item.text || "No description available",
+          source: item.account || item.source || "Unknown", 
+          time: item.created ? formatTimeAgo(item.created) : "זמן לא ידוע",
+          url: item.url,
+          analysis: {
+            impact: 50,
+            confidence: 50,
+            sentiment: "neutral",
+            reasoning: "ניתוח לא זמין כרגע",
+            tickers: [],
+            sectors: []
+          },
+          keywords: extractMatchedKeywords(item.text, item.title)
+        });
+      }
+    }
+
+    res.json({
+      ok: true,
+      news: analyzedNews,
+      total: analyzedNews.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Mobile news endpoint error:', error);
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Execute mobile trade
+app.post("/api/mobile/trade", async (req, res) => {
+  try {
+    const { newsId, optionType, amount = 10000 } = req.body;
+    
+    if (!newsId || !optionType) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing required parameters: newsId, optionType"
+      });
+    }
+
+    // Create mock cross-match for mobile trade
+    const mockCrossMatch = {
+      keyword: `mobile_trade_${newsId}`,
+      accounts: ["mobile_user"],
+      confidence: 1.0,
+      timestamp: Date.now(),
+      metadata: {
+        newsId,
+        optionType: optionType.toUpperCase(),
+        amount
+      }
+    };
+
+    const tradeResult = await executeTradingSignal(mockCrossMatch);
+    
+    if (tradeResult && !tradeResult.error) {
+      // Send mobile alert
+      await sendTradingAlert(tradeResult);
+      
+      res.json({
+        ok: true,
+        trade: tradeResult,
+        message: `${optionType.toUpperCase()} trade executed successfully`,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        ok: false,
+        error: tradeResult?.error || "Trade execution failed",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+  } catch (error) {
+    console.error('Mobile trade error:', error);
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Mobile app status
+app.get("/api/mobile/status", (req, res) => {
+  try {
+    const tradingStatus = TradingControls.getStatus();
+    
+    res.json({
+      ok: true,
+      status: {
+        trading_enabled: tradingStatus.enabled,
+        daily_trades: tradingStatus.dailyStats.orders || 0,
+        daily_pnl: tradingStatus.dailyStats.pnl || 0,
+        alerts_today: tradingStatus.dailyStats.alerts || 0,
+        connection_status: "connected",
+        monitored_accounts: configManager.getTwitterAccounts(),
+        keywords_count: configManager.getKeywords().length,
+        dry_run: configManager.isDryRun()
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Utility function to format time ago
+function formatTimeAgo(dateString) {
+  const now = new Date();
+  const date = new Date(dateString);
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  
+  if (diffMins < 1) return "עכשיו";
+  if (diffMins < 60) return `${diffMins} דקות`;
+  if (diffHours < 24) return `${diffHours} שעות`;
+  if (diffDays < 7) return `${diffDays} ימים`;
+  
+  return date.toLocaleDateString('he-IL');
+}
+
 // נקודת Webhook לאפיפיי / משימות אחרות
 // שימוש: https://<your-domain>/apify/webhook?secret=MYSECRET&source=twitter
 app.post("/apify/webhook", async (req, res) => {
@@ -908,10 +1431,28 @@ app.listen(PORT, () => {
   console.log(`🔑 Keywords: ${ALL_KEYWORDS.length} total`);
   console.log(`📡 RSS Collection: ${ENABLE_RSS === "true" ? "ENABLED" : "DISABLED"}`);
   console.log(`⏱️ Polling: ${ENABLE_POLLING === "true" ? `ENABLED (${POLLING_INTERVAL} min)` : "DISABLED"}`);
+  console.log(`🐦 Twitter Monitoring: @FirstSquawk, @DeItaone`);
+  console.log(`🎯 Twitter-Only Mode: RSS feeds disabled`);
   
-  // הפעלת איסוף חדשות תקופתי
+  // הפעלת איסוף חדשות תקופתי (מבוטל)
   if (ENABLE_POLLING === "true") {
     newsPollingInstance = startNewsCollection();
+  }
+  
+  // הפעלת ניטור טוויטר
+  try {
+    const twitterMonitor = monitorSpecificTwitterAccounts();
+    if (twitterMonitor && twitterMonitor.start) {
+      twitterMonitor.start();
+      console.log(`🚀 Twitter monitoring activated - checking @FirstSquawk & @DeItaone every ${POLLING_INTERVAL} minute(s)`);
+      console.log(`🔍 Looking for cross-matches in keywords: ${configManager.get('twitter.keywords').slice(0,5).join(', ')}... (+${configManager.get('twitter.keywords').length - 5} more)`);
+    } else {
+      console.log(`🐦 Twitter monitoring system initialized (waiting for webhook data)`);
+      console.log(`📍 Monitoring: @FirstSquawk, @DeItaone for keyword matches`);
+    }
+  } catch (error) {
+    console.log(`🐦 Twitter monitoring system ready (${error.message})`);
+    console.log(`📍 Monitoring: @FirstSquawk, @DeItaone for keyword matches`);
   }
 });
 

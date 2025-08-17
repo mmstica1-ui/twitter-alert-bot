@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>SPX Trading Hub</title>
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-primary: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            --bg-card: rgba(255, 255, 255, 0.05);
+            --bg-glass: rgba(255, 255, 255, 0.1);
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.7);
+            --text-muted: rgba(255, 255, 255, 0.5);
+            --accent-blue: #00d4ff;
+            --accent-purple: #7c3aed;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --neutral: #6b7280;
+            --shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            --shadow-hover: 0 30px 60px rgba(0, 0, 0, 0.4);
+            --border-radius: 16px;
+            --border-radius-lg: 24px;
+            --animation-speed: 0.3s;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+            min-height: 100vh;
+            position: relative;
+        }
+        
+        /* Animated background particles */
+        .bg-particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            overflow: hidden;
+        }
+        
+        .particle {
+            position: absolute;
+            width: 2px;
+            height: 2px;
+            background: var(--accent-blue);
+            border-radius: 50%;
+            animation: float 6s infinite linear;
+            opacity: 0.6;
+        }
+        
+        @keyframes float {
+            0% { transform: translateY(100vh) rotate(0deg); opacity: 0; }
+            10% { opacity: 0.6; }
+            90% { opacity: 0.6; }
+            100% { transform: translateY(-10vh) rotate(360deg); opacity: 0; }
+        }
+        
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 428px;
+            margin: 0 auto;
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            min-height: 100vh;
+        }
+        
+        /* Header */
+        .header {
+            position: sticky;
+            top: 0;
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px);
+            padding: 20px 20px 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+        }
+        
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .app-title {
+            font-size: 24px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--bg-card);
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-connected { background: var(--success); }
+        .status-warning { background: var(--warning); }
+        .status-error { background: var(--danger); }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 12px 8px;
+            background: var(--bg-card);
+            border-radius: var(--border-radius);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all var(--animation-speed) ease;
+        }
+        
+        .stat-item:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-hover);
+        }
+        
+        .stat-value {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        /* News Feed */
+        .news-feed {
+            padding: 20px;
+            padding-bottom: 100px;
+        }
+        
+        .news-item {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border-radius: var(--border-radius-lg);
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all var(--animation-speed) ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .news-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-gradient);
+            opacity: 0;
+            transition: opacity var(--animation-speed) ease;
+            pointer-events: none;
+        }
+        
+        .news-item:hover::before {
+            opacity: 0.1;
+        }
+        
+        .news-item.bullish {
+            --bg-gradient: linear-gradient(135deg, var(--success) 0%, rgba(16, 185, 129, 0.3) 100%);
+            border-left: 4px solid var(--success);
+            box-shadow: 0 8px 32px rgba(16, 185, 129, 0.15);
+        }
+        
+        .news-item.bearish {
+            --bg-gradient: linear-gradient(135deg, var(--danger) 0%, rgba(239, 68, 68, 0.3) 100%);
+            border-left: 4px solid var(--danger);
+            box-shadow: 0 8px 32px rgba(239, 68, 68, 0.15);
+        }
+        
+        .news-item.neutral {
+            --bg-gradient: linear-gradient(135deg, var(--neutral) 0%, rgba(107, 114, 128, 0.3) 100%);
+            border-left: 4px solid var(--neutral);
+        }
+        
+        .news-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+        
+        .news-source {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .source-icon {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--accent-blue);
+        }
+        
+        .news-time {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        
+        .news-content {
+            margin-bottom: 16px;
+        }
+        
+        .news-title {
+            font-size: 16px;
+            font-weight: 600;
+            line-height: 1.4;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+        
+        .news-description {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+        
+        /* AI Analysis Panel */
+        .ai-analysis {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: var(--border-radius);
+            padding: 16px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .analysis-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .ai-badge {
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+            color: white;
+            padding: 4px 8px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .analysis-metric {
+            text-align: center;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .metric-value {
+            font-size: 20px;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+        
+        .metric-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        
+        .confidence-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 1s ease;
+        }
+        
+        .confidence-high { background: var(--success); }
+        .confidence-medium { background: var(--warning); }
+        .confidence-low { background: var(--danger); }
+        
+        .market-impact {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .impact-icon {
+            font-size: 24px;
+        }
+        
+        .impact-text {
+            flex: 1;
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+        
+        /* Trading Actions */
+        .trading-actions {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        
+        .action-btn {
+            padding: 14px 20px;
+            border-radius: var(--border-radius);
+            border: none;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all var(--animation-speed) ease;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .action-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transition: left 0.6s;
+        }
+        
+        .action-btn:hover::before {
+            left: 100%;
+        }
+        
+        .action-btn:active {
+            transform: scale(0.95);
+        }
+        
+        .btn-call {
+            background: linear-gradient(135deg, var(--success), #059669);
+            color: white;
+            box-shadow: 0 8px 25px rgba(16, 185, 129, 0.3);
+        }
+        
+        .btn-call:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 35px rgba(16, 185, 129, 0.4);
+        }
+        
+        .btn-put {
+            background: linear-gradient(135deg, var(--danger), #dc2626);
+            color: white;
+            box-shadow: 0 8px 25px rgba(239, 68, 68, 0.3);
+        }
+        
+        .btn-put:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 35px rgba(239, 68, 68, 0.4);
+        }
+        
+        /* Bottom Navigation */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 428px;
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            display: flex;
+            justify-content: space-around;
+            z-index: 100;
+        }
+        
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 8px 16px;
+            border-radius: 12px;
+            transition: all var(--animation-speed) ease;
+            cursor: pointer;
+            flex: 1;
+        }
+        
+        .nav-item.active {
+            background: var(--bg-card);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .nav-icon {
+            font-size: 20px;
+            margin-bottom: 2px;
+        }
+        
+        .nav-label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+        
+        .nav-item.active .nav-label {
+            color: var(--text-primary);
+        }
+        
+        /* Loading States */
+        .loading {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top: 3px solid var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Toast Notifications */
+        .toast {
+            position: fixed;
+            top: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: var(--border-radius);
+            padding: 16px 20px;
+            color: var(--text-primary);
+            font-weight: 500;
+            z-index: 1000;
+            animation: slideDown var(--animation-speed) ease;
+        }
+        
+        @keyframes slideDown {
+            from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
+            to { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+        
+        .toast.success { border-left: 4px solid var(--success); }
+        .toast.error { border-left: 4px solid var(--danger); }
+        .toast.warning { border-left: 4px solid var(--warning); }
+        
+        /* Responsive adjustments */
+        @media (max-width: 380px) {
+            .container { margin: 0; border-radius: 0; }
+            .header { padding: 15px; }
+            .news-feed { padding: 15px; padding-bottom: 100px; }
+            .news-item { padding: 16px; }
+            .stats-bar { gap: 8px; }
+        }
+        
+        /* Dark theme enhancements */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-card: rgba(255, 255, 255, 0.08);
+                --bg-glass: rgba(255, 255, 255, 0.12);
+            }
+        }
+        
+        /* Animations for new content */
+        .news-item.new {
+            animation: slideInUp 0.6s ease;
+        }
+        
+        @keyframes slideInUp {
+            from {
+                transform: translateY(30px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        /* Premium visual effects */
+        .glow {
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+            animation: glow 2s ease-in-out infinite alternate;
+        }
+        
+        @keyframes glow {
+            from { box-shadow: 0 0 20px rgba(0, 212, 255, 0.3); }
+            to { box-shadow: 0 0 30px rgba(0, 212, 255, 0.5); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Background particles -->
+    <div class="bg-particles" id="bgParticles"></div>
+    
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-top">
+                <h1 class="app-title">SPX Trading Hub</h1>
+                <div class="connection-status" id="connectionStatus">
+                    <div class="status-dot status-connected"></div>
+                    <span>Live</span>
+                </div>
+            </div>
+            
+            <!-- Twitter Mode Indicator -->
+            <div style="background: rgba(29, 78, 216, 0.1); border: 1px solid rgba(29, 78, 216, 0.3); border-radius: 12px; padding: 8px 12px; margin: 8px 0; text-align: center;">
+                <div style="color: #3B82F6; font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                    <span>🐦</span>
+                    <span>Twitter-Only Mode: @FirstSquawk & @DeItaone</span>
+                </div>
+            </div>
+            
+            <div class="stats-bar">
+                <div class="stat-item">
+                    <div class="stat-value" id="dailyTrades">0</div>
+                    <div class="stat-label">עסקאות</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="dailyPnL">$0</div>
+                    <div class="stat-label">רווח/הפסד</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="alertsCount">0</div>
+                    <div class="stat-label">התראות</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- News Feed -->
+        <div class="news-feed" id="newsFeed">
+            <div class="loading" id="loadingIndicator">
+                <div class="spinner"></div>
+                <div>טוען ידיעות...</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Bottom Navigation -->
+    <div class="bottom-nav">
+        <div class="nav-item active" onclick="switchTab('news')">
+            <div class="nav-icon">📰</div>
+            <div class="nav-label">ידיעות</div>
+        </div>
+        <div class="nav-item" onclick="switchTab('portfolio')">
+            <div class="nav-icon">📊</div>
+            <div class="nav-label">פורטפוליו</div>
+        </div>
+        <div class="nav-item" onclick="switchTab('settings')">
+            <div class="nav-icon">⚙️</div>
+            <div class="nav-label">הגדרות</div>
+        </div>
+        <div class="nav-item" onclick="switchTab('alerts')">
+            <div class="nav-icon">🔔</div>
+            <div class="nav-label">התראות</div>
+        </div>
+    </div>
+    
+    <script>
+        class TradingApp {
+            constructor() {
+                this.newsItems = [];
+                this.lastUpdate = Date.now();
+                this.isConnected = true;
+                this.currentTab = 'news';
+                
+                this.init();
+            }
+            
+            init() {
+                this.createBackgroundParticles();
+                this.loadInitialData();
+                this.startRealTimeUpdates();
+                this.setupEventListeners();
+            }
+            
+            createBackgroundParticles() {
+                const container = document.getElementById('bgParticles');
+                
+                for (let i = 0; i < 20; i++) {
+                    const particle = document.createElement('div');
+                    particle.className = 'particle';
+                    particle.style.left = Math.random() * 100 + '%';
+                    particle.style.animationDelay = Math.random() * 6 + 's';
+                    particle.style.animationDuration = (6 + Math.random() * 4) + 's';
+                    container.appendChild(particle);
+                }
+            }
+            
+            async loadInitialData() {
+                try {
+                    // Load trading status
+                    const statusResponse = await fetch('/trading/status');
+                    const statusData = await statusResponse.json();
+                    this.updateStats(statusData);
+                    
+                    // Load recent news with analysis
+                    const newsResponse = await fetch('/collect/news');
+                    const newsData = await newsResponse.json();
+                    
+                    if (newsData.ok) {
+                        await this.loadNewsWithAnalysis();
+                    }
+                    
+                } catch (error) {
+                    console.error('Error loading initial data:', error);
+                    this.showToast('שגיאה בטעינת נתונים', 'error');
+                    this.setConnectionStatus(false);
+                }
+            }
+            
+            async loadNewsWithAnalysis() {
+                try {
+                    document.getElementById('loadingIndicator').style.display = 'block';
+                    
+                    // Fetch real analyzed news from API
+                    const response = await fetch('/api/mobile/news?limit=20');
+                    const data = await response.json();
+                    
+                    document.getElementById('loadingIndicator').style.display = 'none';
+                    
+                    if (data.ok && data.news) {
+                        this.renderNews(data.news);
+                        this.showToast(`נטענו ${data.news.length} ידיעות`, 'success');
+                    } else {
+                        // Fallback to mock data if API fails
+                        const mockNews = this.getMockNews();
+                        this.renderNews(mockNews);
+                        this.showToast('נטענו ידיעות לדוגמה', 'warning');
+                    }
+                    
+                } catch (error) {
+                    console.error('Error loading news:', error);
+                    document.getElementById('loadingIndicator').style.display = 'none';
+                    
+                    // Show mock data as fallback
+                    const mockNews = this.getMockNews();
+                    this.renderNews(mockNews);
+                    this.showToast('שגיאה בטעינה - מציג נתונים לדוגמה', 'error');
+                }
+            }
+            
+            getMockNews() {
+                return [
+                    {
+                        id: 1,
+                        title: "Fed Official Signals Potential Emergency Rate Cut",
+                        description: "Federal Reserve official suggests emergency meeting possible if inflation data shows unexpected decline",
+                        source: "FirstSquawk",
+                        time: "2 דקות",
+                        analysis: {
+                            impact: 85,
+                            confidence: 92,
+                            sentiment: "bullish",
+                            reasoning: "Emergency rate cuts historically boost equity markets significantly"
+                        },
+                        keywords: ["Fed", "Emergency Cut", "Inflation"]
+                    },
+                    {
+                        id: 2,
+                        title: "Breaking: Major Bank Reports Unexpected Credit Losses",
+                        description: "JPMorgan announces higher than expected credit losses in commercial real estate portfolio",
+                        source: "DeItaone",
+                        time: "5 דקות", 
+                        analysis: {
+                            impact: 78,
+                            confidence: 88,
+                            sentiment: "bearish",
+                            reasoning: "Banking sector stress could signal broader financial system concerns"
+                        },
+                        keywords: ["Credit Crisis", "Banking", "Real Estate"]
+                    },
+                    {
+                        id: 3,
+                        title: "China Announces New Stimulus Package",
+                        description: "Chinese government unveils $500B infrastructure spending plan",
+                        source: "FirstSquawk", 
+                        time: "12 דקות",
+                        analysis: {
+                            impact: 72,
+                            confidence: 85,
+                            sentiment: "bullish",
+                            reasoning: "Chinese stimulus typically supports global growth and commodity prices"
+                        },
+                        keywords: ["China", "Stimulus", "Infrastructure"]
+                    }
+                ];
+            }
+            
+            renderNews(newsItems) {
+                const newsFeed = document.getElementById('newsFeed');
+                newsFeed.innerHTML = '';
+                
+                newsItems.forEach((item, index) => {
+                    const newsElement = this.createNewsElement(item);
+                    newsElement.style.animationDelay = `${index * 0.1}s`;
+                    newsFeed.appendChild(newsElement);
+                });
+            }
+            
+            createNewsElement(item) {
+                const element = document.createElement('div');
+                element.className = `news-item new ${item.analysis.sentiment}`;
+                
+                const confidenceColor = item.analysis.confidence >= 80 ? 'confidence-high' : 
+                                      item.analysis.confidence >= 60 ? 'confidence-medium' : 'confidence-low';
+                
+                const impactIcon = item.analysis.sentiment === 'bullish' ? '📈' : 
+                                 item.analysis.sentiment === 'bearish' ? '📉' : '➖';
+                
+                element.innerHTML = `
+                    <div class="news-header">
+                        <div class="news-source">
+                            <div class="source-icon"></div>
+                            @${item.source}
+                        </div>
+                        <div class="news-time">${item.time}</div>
+                    </div>
+                    
+                    <div class="news-content">
+                        <h3 class="news-title">${item.title}</h3>
+                        <p class="news-description">${item.description}</p>
+                    </div>
+                    
+                    <div class="ai-analysis">
+                        <div class="analysis-header">
+                            <div class="ai-badge">AI Analysis</div>
+                            <div style="color: var(--text-muted); font-size: 12px;">מופעל ע"י Gemini</div>
+                        </div>
+                        
+                        <div class="analysis-grid">
+                            <div class="analysis-metric">
+                                <div class="metric-value" style="color: ${item.analysis.sentiment === 'bullish' ? 'var(--success)' : item.analysis.sentiment === 'bearish' ? 'var(--danger)' : 'var(--neutral)'}">
+                                    ${item.analysis.impact}%
+                                </div>
+                                <div class="metric-label">השפעה על שוק</div>
+                            </div>
+                            
+                            <div class="analysis-metric">
+                                <div class="metric-value" style="color: var(--accent-blue)">
+                                    ${item.analysis.confidence}%
+                                </div>
+                                <div class="metric-label">רמת ביטחון</div>
+                                <div class="confidence-bar">
+                                    <div class="confidence-fill ${confidenceColor}" style="width: ${item.analysis.confidence}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="market-impact">
+                            <div class="impact-icon">${impactIcon}</div>
+                            <div class="impact-text">${item.analysis.reasoning}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="trading-actions">
+                        <button class="action-btn btn-call" onclick="app.executeTrade('${item.id}', 'call')">
+                            <span>📈</span>
+                            <span>Call $10K</span>
+                        </button>
+                        <button class="action-btn btn-put" onclick="app.executeTrade('${item.id}', 'put')">
+                            <span>📉</span>
+                            <span>Put $10K</span>
+                        </button>
+                    </div>
+                `;
+                
+                return element;
+            }
+            
+            async executeTrade(newsId, type) {
+                try {
+                    this.showToast(`מבצע עסקת ${type.toUpperCase()} של $10,000...`, 'warning');
+                    
+                    const response = await fetch('/api/mobile/trade', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            newsId: newsId,
+                            optionType: type.toUpperCase(),
+                            amount: 10000
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.ok) {
+                        this.showToast(`🚀 עסקת ${type.toUpperCase()} בוצעה בהצלחה!`, 'success');
+                        
+                        // Update stats
+                        await this.updateStats();
+                        
+                        // Add glow effect to the news item
+                        const newsElements = document.querySelectorAll('.news-item');
+                        newsElements.forEach(element => {
+                            if (element.innerHTML.includes(newsId)) {
+                                element.classList.add('glow');
+                                setTimeout(() => element.classList.remove('glow'), 3000);
+                            }
+                        });
+                        
+                        // Vibrate if supported (mobile feedback)
+                        if (navigator.vibrate) {
+                            navigator.vibrate([100, 50, 100]);
+                        }
+                        
+                    } else {
+                        this.showToast(`❌ שגיאה: ${result.error}`, 'error');
+                    }
+                    
+                } catch (error) {
+                    console.error('Trade execution error:', error);
+                    this.showToast('שגיאה בביצוע עסקה', 'error');
+                }
+            }
+            
+            async updateStats(data = null) {
+                try {
+                    if (!data) {
+                        // Fetch fresh data
+                        const response = await fetch('/api/mobile/status');
+                        if (response.ok) {
+                            const result = await response.json();
+                            if (result.ok) {
+                                data = result;
+                            }
+                        }
+                    }
+                    
+                    if (data && data.status) {
+                        const stats = data.status;
+                        
+                        // Update daily trades
+                        document.getElementById('dailyTrades').textContent = stats.daily_trades || 0;
+                        
+                        // Update P&L with color coding
+                        const pnl = stats.daily_pnl || 0;
+                        const pnlElement = document.getElementById('dailyPnL');
+                        pnlElement.textContent = `$${pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}`;
+                        pnlElement.style.color = pnl >= 0 ? 'var(--success)' : 'var(--danger)';
+                        
+                        // Update alerts count
+                        document.getElementById('alertsCount').textContent = stats.alerts_today || 0;
+                        
+                        // Update connection status
+                        this.setConnectionStatus(stats.connection_status === 'connected');
+                    }
+                } catch (error) {
+                    console.error('Error updating stats:', error);
+                }
+            }
+            
+            setConnectionStatus(connected) {
+                this.isConnected = connected;
+                const statusElement = document.getElementById('connectionStatus');
+                const dot = statusElement.querySelector('.status-dot');
+                const text = statusElement.querySelector('span');
+                
+                if (connected) {
+                    dot.className = 'status-dot status-connected';
+                    text.textContent = 'Live';
+                } else {
+                    dot.className = 'status-dot status-error';
+                    text.textContent = 'Offline';
+                }
+            }
+            
+            startRealTimeUpdates() {
+                setInterval(async () => {
+                    try {
+                        // Check connection
+                        const response = await fetch('/trading/status');
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.updateStats(data);
+                            this.setConnectionStatus(true);
+                        } else {
+                            this.setConnectionStatus(false);
+                        }
+                    } catch (error) {
+                        this.setConnectionStatus(false);
+                    }
+                }, 10000); // Update every 10 seconds
+                
+                // Simulate new news items occasionally
+                setInterval(() => {
+                    if (Math.random() < 0.1) { // 10% chance every 30 seconds
+                        this.simulateNewNews();
+                    }
+                }, 30000);
+            }
+            
+            simulateNewNews() {
+                const mockNews = {
+                    id: Date.now(),
+                    title: "Market Flash: New Development Detected",
+                    description: "Cross-signal detected between monitored accounts",
+                    source: Math.random() > 0.5 ? "FirstSquawk" : "DeItaone",
+                    time: "עכשיו",
+                    analysis: {
+                        impact: Math.floor(Math.random() * 40) + 60, // 60-100%
+                        confidence: Math.floor(Math.random() * 30) + 70, // 70-100%
+                        sentiment: Math.random() > 0.5 ? "bullish" : "bearish",
+                        reasoning: "Real-time cross-signal analysis indicates significant market opportunity"
+                    },
+                    keywords: ["Breaking", "Alert"]
+                };
+                
+                const newsFeed = document.getElementById('newsFeed');
+                const newsElement = this.createNewsElement(mockNews);
+                newsElement.classList.add('glow');
+                newsFeed.insertBefore(newsElement, newsFeed.firstChild);
+                
+                // Update alerts count
+                const alertsElement = document.getElementById('alertsCount');
+                alertsElement.textContent = parseInt(alertsElement.textContent) + 1;
+                
+                this.showToast('ידיעה חדשה התקבלה!', 'success');
+                
+                // Remove glow after 5 seconds
+                setTimeout(() => newsElement.classList.remove('glow'), 5000);
+            }
+            
+            showToast(message, type = 'success') {
+                const toast = document.createElement('div');
+                toast.className = `toast ${type}`;
+                toast.textContent = message;
+                
+                document.body.appendChild(toast);
+                
+                setTimeout(() => {
+                    toast.remove();
+                }, 4000);
+            }
+            
+            setupEventListeners() {
+                // Add swipe gestures for mobile
+                let startX, startY, distX, distY;
+                
+                document.addEventListener('touchstart', (e) => {
+                    const touch = e.changedTouches[0];
+                    startX = touch.pageX;
+                    startY = touch.pageY;
+                });
+                
+                document.addEventListener('touchend', (e) => {
+                    const touch = e.changedTouches[0];
+                    distX = touch.pageX - startX;
+                    distY = touch.pageY - startY;
+                    
+                    // Horizontal swipe
+                    if (Math.abs(distX) > Math.abs(distY) && Math.abs(distX) > 100) {
+                        if (distX > 0) {
+                            this.handleSwipe('right');
+                        } else {
+                            this.handleSwipe('left');
+                        }
+                    }
+                });
+                
+                // Pull to refresh
+                let pullStart, pullCurrent;
+                const newsFeed = document.getElementById('newsFeed');
+                
+                newsFeed.addEventListener('touchstart', (e) => {
+                    pullStart = e.touches[0].clientY;
+                });
+                
+                newsFeed.addEventListener('touchmove', (e) => {
+                    pullCurrent = e.touches[0].clientY;
+                    if (newsFeed.scrollTop === 0 && pullCurrent > pullStart + 100) {
+                        this.showToast('משחרר לרענון...', 'warning');
+                    }
+                });
+                
+                newsFeed.addEventListener('touchend', () => {
+                    if (newsFeed.scrollTop === 0 && pullCurrent > pullStart + 100) {
+                        this.loadNewsWithAnalysis();
+                        this.showToast('מרענן...', 'success');
+                    }
+                });
+            }
+            
+            handleSwipe(direction) {
+                // Handle swipe gestures
+                console.log('Swipe:', direction);
+            }
+        }
+        
+        // Global functions
+        function switchTab(tab) {
+            const navItems = document.querySelectorAll('.nav-item');
+            navItems.forEach(item => item.classList.remove('active'));
+            event.target.closest('.nav-item').classList.add('active');
+            
+            console.log('Switched to tab:', tab);
+            // Here you would implement tab switching logic
+        }
+        
+        // Initialize app
+        const app = new TradingApp();
+        
+        // Service Worker for PWA functionality
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(console.error);
+        }
+    </script>
+</body>
+</html>

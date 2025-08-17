@@ -10,8 +10,8 @@ import crypto from 'crypto';
 const TRADING_CONFIG = {
   // Twitter accounts to monitor (ADD YOUR SPECIFIC ACCOUNTS)
   MONITORED_ACCOUNTS: [
-    process.env.TWITTER_ACCOUNT_1 || 'account1', // Replace with actual usernames
-    process.env.TWITTER_ACCOUNT_2 || 'account2'
+    process.env.TWITTER_ACCOUNT_1 || 'FirstSquawk', // Default to FirstSquawk
+    process.env.TWITTER_ACCOUNT_2 || 'DeItaone'     // Default to DeItaone
   ],
   
   // Polling frequency for Twitter (every minute = 60000ms)
@@ -353,8 +353,8 @@ async function executeTradingSignal(crossMatch) {
   }
 }
 
-// Enhanced Twitter monitoring for specific accounts
-async function monitorSpecificTwitterAccounts() {
+// Enhanced Twitter monitoring for specific accounts  
+function monitorSpecificTwitterAccounts() {
   console.log('👀 Monitoring Twitter accounts:', TRADING_CONFIG.MONITORED_ACCOUNTS);
   
   // This would integrate with Twitter API v2 or Apify

@@ -1,0 +1,106 @@
+{
+  "twitter": {
+    "accounts": [
+      "FirstSquawk",
+      "DeItaone"
+    ],
+    "pollInterval": 60000,
+    "keywords": [
+      "Invasion",
+      "Attack",
+      "War",
+      "Missile Launch",
+      "Cyberattack",
+      "Sanctions",
+      "Embargo",
+      "Tariffs",
+      "Nuclear",
+      "Naval Blockade",
+      "Escalation",
+      "Terrorist Attack",
+      "Assassination",
+      "Fed",
+      "FOMC",
+      "Emergency Meeting",
+      "Emergency Cut",
+      "Rate Hike",
+      "Rate Cut",
+      "Powell",
+      "Financial Crisis",
+      "Credit Crisis",
+      "Contagion",
+      "Default",
+      "Bankruptcy",
+      "Sovereign Downgrade",
+      "Halts Trading",
+      "Pandemic",
+      "Outbreak",
+      "Grid Failure",
+      "Earthquake",
+      "Tsunami",
+      "Volcanic Eruption",
+      "Trump",
+      "Xi Jinping",
+      "Putin",
+      "Breaking",
+      "Urgent",
+      "Alert",
+      "SPY",
+      "QQQ",
+      "VIX"
+    ]
+  },
+  "ibkr": {
+    "host": "localhost",
+    "port": 5000,
+    "accountId": "",
+    "clientId": 1,
+    "paperTrading": true
+  },
+  "spx": {
+    "tradeAmount": 10000,
+    "strikeOffset": 0.005,
+    "enableCalls": true,
+    "enablePuts": true,
+    "timeToExpiry": "NEAREST"
+  },
+  "safety": {
+    "dryRun": true,
+    "requireConfirmation": true,
+    "maxDailyLoss": 50000,
+    "maxOrdersPerHour": 20,
+    "maxOrdersPerDay": 100,
+    "tradingHours": {
+      "start": "09:30",
+      "end": "16:00"
+    },
+    "pauseOnLoss": 25000
+  },
+  "alerts": {
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "chatId": ""
+    },
+    "email": {
+      "enabled": false,
+      "smtp": {
+        "host": "",
+        "port": 587,
+        "user": "",
+        "pass": ""
+      },
+      "to": ""
+    },
+    "pushNotifications": {
+      "enabled": true,
+      "service": "telegram"
+    }
+  },
+  "advanced": {
+    "crossMatchWindow": 300,
+    "minConfidenceScore": 0.7,
+    "enableAIAnalysis": true,
+    "logLevel": "info"
+  }
+}

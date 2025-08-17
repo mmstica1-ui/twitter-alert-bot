@@ -1,0 +1,36 @@
+{
+  "name": "SPX Trading Hub",
+  "short_name": "SPX Hub",
+  "description": "Advanced SPX Options Trading Platform with AI Analysis",
+  "start_url": "/mobile-app.html",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "orientation": "portrait",
+  "scope": "/",
+  "lang": "he",
+  "dir": "rtl",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTkyIiBoZWlnaHQ9IjE5MiIgdmlld0JveD0iMCAwIDE5MiAxOTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxOTIiIGhlaWdodD0iMTkyIiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl8xXzEpIi8+CjxwYXRoIGQ9Ik05NiAzMkM1NC4xNDQgMzIgMjAgNjYuMTQ0IDIwIDEwOEM0NCAxMDggNjggOTcgOTYgOTdDMTI0IDk3IDE0OCAxMDggMTcyIDEwOEMxNzIgNjYuMTQ0IDEzNy44NTYgMzIgOTYgMzJaIiBmaWxsPSIjMDBkNGZmIi8+CjxwYXRoIGQ9Ik05NiAxNjBDMTM3Ljg1NiAxNjAgMTcyIDEyNS44NTYgMTcyIDg0QzE0OCA4NCAxMjQgOTUgOTYgOTVDNjggOTUgNDQgODQgMjAgODRDMjAgMTI1Ljg1NiA1NC4xNDQgMTYwIDk2IDE2MFoiIGZpbGw9IiM3YzNhZWQiLz4KPGRlZnM+CjxsaW5lYXJHcmFkaWVudCBpZD0icGFpbnQwX2xpbmVhcl8xXzEiIHgxPSIwIiB5MT0iMCIgeDI9IjE5MiIgeTI9IjE5MiIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgo8c3RvcCBzdG9wLWNvbG9yPSIjMWExYTJlIi8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzBmMzQ2MCIvPgo8L2xpbmVhckdyYWRpZW50Pgo8L2RlZnM+Cjwvc3ZnPgo=",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIiByeD0iNjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl8yXzEpIi8+CjxwYXRoIGQ9Ik0yNTYgODZDMTQ1LjA1NCA4NiA1NCA1My45NiA1NCAyOTBDMTE4IDI5MCAxODIgMjYwIDI1NiAyNjBDMzMwIDI2MCAzOTQgMjkwIDQ1OCAyOTBDNDU4IDE3Ny4wNTQgMzY2Ljk0NiA4NiAyNTYgODZaIiBmaWxsPSIjMDBkNGZmIi8+CjxwYXRoIGQ9Ik0yNTYgNDI2QzM2Ni45NDYgNDI2IDQ1OCAzMzQuOTQ2IDQ1OCAyMjRDMzk0IDIyNCAzMzAgMjU0IDI1NiAyNTRDMTgyIDI1NCAxMTggMjI0IDU0IDIyNEM1NCAzMzQuOTQ2IDE0NS4wNTQgNDI2IDI1NiA0MjZaIiBmaWxsPSIjN2MzYWVkIi8+CjxkZWZzPgo8bGluZWFyR3JhZGllbnQgaWQ9InBhaW50MF9saW5lYXJfMl8xIiB4MT0iMCIgeTE9IjAiIHgyPSI1MTIiIHkyPSI1MTIiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KPHN0b3Agc3RvcC1jb2xvcj0iIzFhMWEyZSIvPgo8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZjM0NjAiLz4KPC9saW5lYXJHcmFkaWVudD4KPC9kZWZzPgo8L3N2Zz4K",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "business", "productivity"],
+  "screenshots": [
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIwIiBoZWlnaHQ9IjU2OCIgdmlld0JveD0iMCAwIDMyMCA1NjgiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIzMjAiIGhlaWdodD0iNTY4IiByeD0iMjQiIGZpbGw9IiMxYTFhMmUiLz4KPHN2ZyB4PSI0MCIgeT0iNDAiIHdpZHRoPSIyNDAiIGhlaWdodD0iNDAiPgo8dGV4dCB4PSIwIiB5PSIzMCIgZmlsbD0iIzAwZDRmZiIgZm9udC1mYW1pbHk9IkludGVyIiBmb250LXNpemU9IjI0IiBmb250LXdlaWdodD0iODAwIj5TUFggVHJhZGluZyBIdWI8L3RleHQ+Cjwvc3ZnPgo8L3N2Zz4K",
+      "sizes": "320x568",
+      "type": "image/svg+xml",
+      "form_factor": "narrow"
+    }
+  ]
+}
