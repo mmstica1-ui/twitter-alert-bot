@@ -47,6 +47,190 @@ async function tgSend(html) {
   }
 }
 
+async function tgSendWithButtons(html, alertId) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.error("❌ Telegram envs missing");
+    return;
+  }
+  
+  try {
+    const keyboard = {
+      inline_keyboard: [
+        [
+          {
+            text: "🟢 BUY CALL (+0.5%)",
+            callback_data: JSON.stringify({
+              action: "trade",
+              side: "CALL",
+              alertId: alertId,
+              distance: 0.5
+            })
+          },
+          {
+            text: "🔴 BUY PUT (-0.5%)",
+            callback_data: JSON.stringify({
+              action: "trade", 
+              side: "PUT",
+              alertId: alertId,
+              distance: 0.5
+            })
+          }
+        ],
+        [
+          {
+            text: "💰 $10K CALL",
+            callback_data: JSON.stringify({
+              action: "trade",
+              side: "CALL", 
+              alertId: alertId,
+              budget: 10000
+            })
+          },
+          {
+            text: "💸 $10K PUT",
+            callback_data: JSON.stringify({
+              action: "trade",
+              side: "PUT",
+              alertId: alertId, 
+              budget: 10000
+            })
+          }
+        ],
+        [
+          {
+            text: "📊 SPX Price",
+            callback_data: JSON.stringify({
+              action: "price"
+            })
+          },
+          {
+            text: "📈 Market Analysis", 
+            callback_data: JSON.stringify({
+              action: "analysis",
+              alertId: alertId
+            })
+          }
+        ]
+      ]
+    };
+
+    const response = await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      chat_id: TELEGRAM_CHAT_ID,
+      text: html,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      reply_markup: keyboard
+    }, { timeout: 15000 });
+    
+    console.log("✅ Telegram message with buttons sent successfully");
+    return response.data;
+  } catch (e) {
+    console.error("⚠️ Telegram send with buttons error:", e?.response?.data || e.message);
+    // Fallback to regular message if buttons fail
+    return await tgSend(html);
+  }
+}
+
+function getSentimentDisplay(sentiment) {
+  switch(sentiment?.toLowerCase()) {
+    case 'positive': return '📈';
+    case 'negative': return '📉';  
+    case 'neutral': return '➖';
+    default: return '❓';
+  }
+}
+
+function getImpactDisplay(impact) {
+  switch(impact?.toLowerCase()) {
+    case 'high': return '🚨';
+    case 'medium': return '⚠️';
+    case 'low': return '🔔';
+    default: return '❓';
+  }
+}
+
+function getUrgencyDisplay(urgency) {
+  switch(urgency?.toLowerCase()) {
+    case 'high': return '⚡';
+    case 'medium': return '🕒';
+    case 'low': return '🐌';
+    default: return '❓';
+  }
+}
+
+async function tgSendWithTradeButtons(html, tradeData) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.error("❌ Telegram envs missing");
+    return;
+  }
+  
+  try {
+    const keyboard = {
+      inline_keyboard: [
+        [
+          {
+            text: "✅ CONFIRM TRADE",
+            callback_data: JSON.stringify({
+              action: "confirm_trade",
+              tradeId: tradeData.id,
+              side: tradeData.side,
+              strike: tradeData.suggestedStrike
+            })
+          },
+          {
+            text: "❌ CANCEL",
+            callback_data: JSON.stringify({
+              action: "cancel_trade",
+              tradeId: tradeData.id
+            })
+          }
+        ],
+        [
+          {
+            text: "📊 Current SPX Price",
+            callback_data: JSON.stringify({
+              action: "spx_price"
+            })
+          },
+          {
+            text: "⚙️ Modify Trade",
+            callback_data: JSON.stringify({
+              action: "modify_trade", 
+              tradeId: tradeData.id
+            })
+          }
+        ],
+        [
+          {
+            text: "💡 Strategy Analysis",
+            callback_data: JSON.stringify({
+              action: "strategy_analysis",
+              side: tradeData.side,
+              strike: tradeData.suggestedStrike,
+              spot: tradeData.currentSpot
+            })
+          }
+        ]
+      ]
+    };
+
+    const response = await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      chat_id: TELEGRAM_CHAT_ID,
+      text: html,
+      parse_mode: "HTML", 
+      disable_web_page_preview: true,
+      reply_markup: keyboard
+    }, { timeout: 15000 });
+    
+    console.log("✅ Telegram trade message with buttons sent successfully");
+    return response.data;
+  } catch (e) {
+    console.error("⚠️ Telegram trade buttons error:", e?.response?.data || e.message);
+    // Fallback to regular message
+    return await tgSend(html);
+  }
+}
+
 function esc(s) {
   return String(s || "")
     .replace(/&/g, "&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -300,27 +484,38 @@ app.post("/web/alert", async (req, res) => {
     // ניתוח AI (אופציונלי)
     const risk = await riskScoreWithGemini({ text: original_text, title });
 
-    // הרכבת הודעת טלגרם
+    // הרכבת הודעת טלגרם עם כפתורי מסחר
     const icon = source === "x" || source === "twitter" ? "🐦" : source === "news" ? "📰" : "📣";
+    
+    // שיפור הצגת סנטימנט עם אייקונים
+    const sentimentDisplay = getSentimentDisplay(risk.sentiment);
+    const impactDisplay = getImpactDisplay(risk.impact);
+    const urgencyDisplay = getUrgencyDisplay(risk.urgency);
+    
     const html = [
       `<b>${icon} ${esc(title || "Market Alert")}</b>`,
       handle ? `<b>@${esc(handle)}</b> — <i>${esc(posted_at)}</i>` : `<i>${esc(posted_at)}</i>`,
       "",
-      esc(original_text),
-      original_url ? `\n<a href="${original_url}">View source</a>` : "",
+      `<i>"${esc(original_text)}"</i>`,
+      original_url ? `\n🔗 <a href="${original_url}">View Source</a>` : "",
       "",
-      `📊 <b>AI Analysis:</b>`,
-      `Impact: <b>${risk.impact.toUpperCase()}</b> | Urgency: <b>${risk.urgency.toUpperCase()}</b> | Sentiment: <b>${risk.sentiment.toUpperCase()}</b> (${risk.confidence}%)`,
-      risk.reasons?.length ? ("• " + risk.reasons.join("\n• ")) : "",
-      detectedKeywords?.length ? `🔑 Keywords: ${detectedKeywords.join(", ")}` : "",
-      tags?.length ? `🏷️ Tags: ${tags.map(t => "#"+t).join(" ")}` : "",
-      sectors?.length ? `🏭 Sectors: ${sectors.join(", ")}` : "",
+      `🧠 <b>AI ANALYSIS:</b>`,
+      `${impactDisplay} Impact: <b>${risk.impact.toUpperCase()}</b>`,
+      `${urgencyDisplay} Urgency: <b>${risk.urgency.toUpperCase()}</b>`,
+      `${sentimentDisplay} Sentiment: <b>${risk.sentiment.toUpperCase()}</b> (${risk.confidence}%)`,
+      "",
+      risk.reasons?.length ? (`💡 <b>Analysis:</b>\n• ${risk.reasons.join("\n• ")}`) : "",
+      "",
+      detectedKeywords?.length ? `🔑 <b>Keywords:</b> ${detectedKeywords.join(", ")}` : "",
+      tags?.length ? `🏷️ <b>Tags:</b> ${tags.map(t => "#"+t).join(" ")}` : "",
+      sectors?.length ? `🏭 <b>Sectors:</b> ${sectors.join(", ")}` : "",
       echoNote,
       "",
-      `<i>⚠️ AI analysis is informational only - not financial advice</i>`,
+      `<i>⚠️ Analysis for informational purposes only</i>`,
     ].filter(Boolean).join("\n");
 
-    await tgSend(html);
+    // שליחת הודעה עם כפתורי מסחר
+    await tgSendWithButtons(html, alertData.id);
 
     // שמירה בהיסטוריה
     const alertData = {
@@ -399,31 +594,34 @@ app.post("/trade", async (req, res) => {
       Math.max(0, currentSpot - suggestedStrike + 50);
     const estQuantity = Math.floor(budgetUsd / (estPremium * 100));
 
-    // שליחת אישור לטלגרם (Audit Trail)
+    // שליחת אישור לטלגרם (Audit Trail) עם כפתורי אישור
+    const sideEmoji = side === 'CALL' ? '🟢📈' : '🔴📉';
+    const profitPotential = side === 'CALL' ? 'Bullish Position' : 'Bearish Position';
+    
     const msg = [
-      `<b>🎯 SPX Trade Preview</b>`,
+      `${sideEmoji} <b>SPX ${side} Trade Preview</b>`,
       ``,
-      `<b>Contract Details:</b>`,
+      `🎯 <b>Contract Details:</b>`,
       `Symbol: <b>${symbol}</b>`,
-      `Side: <b>${side}</b>`,
-      `Current Spot: <b>$${currentSpot}</b>`,
-      `Strike: <b>${suggestedStrike}</b> (${distancePct}% ${side === 'CALL' ? 'OTM' : 'ITM'})`,
-      `Expiry: <b>${finalExpiry.date} (${finalExpiry.dte})</b>`,
+      `Direction: <b>${side} ${profitPotential}</b>`,
+      `Current Spot: <b>$${currentSpot.toLocaleString()}</b>`,
+      `Target Strike: <b>${suggestedStrike}</b> (${distancePct}% ${side === 'CALL' ? 'OTM' : 'ITM'})`,
+      `Expiration: <b>${finalExpiry.date} (${finalExpiry.dte})</b>`,
       ``,
-      `<b>Order Details:</b>`,
+      `💰 <b>Order Details:</b>`,
       `Budget: <b>$${budgetUsd.toLocaleString()}</b>`,
-      `Est. Premium: <b>$${estPremium.toFixed(2)}</b>`,
+      `Est. Premium: <b>$${estPremium.toFixed(2)}</b> per contract`,
       `Est. Quantity: <b>${Math.max(1, estQuantity)} contracts</b>`,
       `Total Est. Cost: <b>$${(Math.max(1, estQuantity) * estPremium * 100).toLocaleString()}</b>`,
       ``,
-      alertId ? `<b>Based on Alert ID:</b> ${alertId}` : "",
-      reason ? `<b>Reason:</b> ${esc(reason)}` : "",
+      alertId ? `📰 <b>Based on Alert:</b> #${alertId}` : "",
+      reason ? `🎯 <b>Strategy:</b> ${esc(reason)}` : "",
       ``,
-      `<i>⚠️ PREVIEW ONLY — No live order sent yet</i>`,
-      `<i>Connect IBKR Gateway for live execution</i>`
+      `⚠️ <b>PREVIEW MODE</b> — No live order sent`,
+      `🔗 Connect IBKR Gateway for live execution`
     ].filter(Boolean).join("\n");
     
-    await tgSend(msg);
+    await tgSendWithTradeButtons(msg, tradeRecord);
 
     // שמירת רשומת המסחר
     const tradeRecord = {
@@ -543,6 +741,79 @@ app.get("/spx/strikes", async (req, res) => {
   }
 });
 
+// 7) Telegram Webhook לטיפול בלחיצות כפתורים
+app.post("/telegram/webhook", async (req, res) => {
+  try {
+    const update = req.body;
+    
+    // טיפול בלחיצות על כפתורים (callback_query)
+    if (update.callback_query) {
+      const callbackQuery = update.callback_query;
+      const data = JSON.parse(callbackQuery.data);
+      const chatId = callbackQuery.message.chat.id;
+      
+      console.log(`🔘 Button pressed: ${data.action}`);
+      
+      let responseText = "";
+      
+      switch (data.action) {
+        case "trade":
+          const currentPrice = await getCurrentSPXPrice();
+          const strike = calculateStrike(currentPrice, data.side, data.distance || 0.5);
+          const budget = data.budget || 10000;
+          
+          responseText = `🎯 <b>${data.side} Trade Prepared</b>\n\nSPX: $${currentPrice}\nStrike: ${strike}\nBudget: $${budget.toLocaleString()}\n\n<i>Use /trade endpoint for execution</i>`;
+          break;
+          
+        case "price":
+          const spxPrice = await getCurrentSPXPrice();
+          const expiry = getNextExpiry();
+          responseText = `📊 <b>Current SPX Price</b>\n\nPrice: <b>$${spxPrice.toLocaleString()}</b>\nNext Expiry: <b>${expiry.date} (${expiry.dte})</b>\nTime: ${new Date().toISOString()}`;
+          break;
+          
+        case "analysis":
+          responseText = `📈 <b>Market Analysis</b>\n\nBased on Alert #${data.alertId}\n\n• Monitor price action around key levels\n• Watch for volume confirmation\n• Consider risk management\n\n<i>This is general guidance only</i>`;
+          break;
+          
+        case "confirm_trade":
+          responseText = `✅ <b>Trade Confirmed</b>\n\nTrade ID: ${data.tradeId}\n${data.side} ${data.strike}\n\n⚠️ <b>PREVIEW MODE</b>\nConnect IBKR for live execution`;
+          break;
+          
+        case "cancel_trade":
+          responseText = `❌ <b>Trade Cancelled</b>\n\nTrade ID: ${data.tradeId} cancelled successfully`;
+          break;
+          
+        case "spx_price":
+          const price = await getCurrentSPXPrice();
+          responseText = `📊 <b>Live SPX Price</b>\n\n<b>$${price.toLocaleString()}</b>\n\nUpdated: ${new Date().toLocaleString()}`;
+          break;
+          
+        default:
+          responseText = `❓ Unknown action: ${data.action}`;
+      }
+      
+      // שליחת תשובה למשתמש
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+        callback_query_id: callbackQuery.id,
+        text: `Processing ${data.action}...`,
+        show_alert: false
+      });
+      
+      // שליחת הודעה חדשה עם התוצאה
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        chat_id: chatId,
+        text: responseText,
+        parse_mode: "HTML"
+      });
+    }
+    
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Telegram webhook error:", error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Trumpet-Style Trading System running on port ${PORT}`);
@@ -550,5 +821,5 @@ app.listen(PORT, () => {
   console.log(`🔑 Risk Scoring: ${RISK_SCORING ? 'ENABLED' : 'DISABLED'}`);
   console.log(`📱 Telegram: ${TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
   console.log(`⏰ Cross-match window: ${WINDOW_SEC} seconds`);
-  console.log(`🎯 Endpoints: /web/alert, /trade, /alerts, /spx/price, /debug`);
+  console.log(`🎯 Endpoints: /web/alert, /trade, /alerts, /spx/price, /debug, /telegram/webhook`);
 });
