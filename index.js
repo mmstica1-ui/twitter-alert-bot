@@ -1,9 +1,12 @@
 // ===============================
-// Simple Alert Bot (Express + Telegram + Gemini Scoring)
+// Advanced News Analyzer (Express + Telegram + Gemini + Multi-Source)
+// Inspired by Trumpet Labs methodology
 // ===============================
 
 import express from "express";
 import crypto from "crypto";
+import cors from "cors";
+import { collectNewsFromAllSources, startNewsPolling, filterNewsByKeywords } from './news-sources.js';
 
 // ------- ENV -------
 const {
@@ -13,18 +16,29 @@ const {
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
 
-  // Optional scoring
-  RISK_SCORING = "off",
+  // AI Analysis
+  RISK_SCORING = "on",             // שונה ל-on כברירת מחדל
   GEMINI_API_KEY,
 
-  // Keywords and rules
-  KEYWORDS = "tariff,tariffs,breaking,0dte,embargo,sanctions,trade war,customs,duty",
+  // News Sources
+  NEWS_API_KEY,                    // NewsAPI key
+  ENABLE_RSS = "true",             // איסוף מ-RSS feeds
+  ENABLE_POLLING = "true",         // איסוף תקופתי
+  POLLING_INTERVAL = "5",          // דקות בין איסופים
+
+  // Keywords and rules  
+  KEYWORDS = "tariff,tariffs,breaking,fed,interest rates,inflation,earnings,stock,market,trading,SEC,regulation,sanctions,trade war,merger,acquisition,ipo,crypto,bitcoin,ethereum",
+  MARKET_KEYWORDS = "S&P,SPY,QQQ,NASDAQ,DOW,VIX,treasury,bond,yield,dollar,EUR,oil,gold,silver", // מילות מפתח נוספות לשוק
   WINDOW_SEC = "300",              // חלון זמן שניות לצבירת אירועים
   MIN_UNIQUE_ACCOUNTS = "2",       // כמה חשבונות שונים לפחות כדי לטריגר
-  MAX_ITEMS_FETCH = "50",          // לא בשימוש כאן (רלוונטי אם תוסיף polling)
+  MAX_ITEMS_FETCH = "50",          
 
   // Webhook security
   APIFY_WEBHOOK_SECRET,            // נדרש: אותו secret ששמת ב-?secret=...
+  
+  // Filtering
+  MIN_IMPACT_SCORE = "2",          // ציון השפעה מינימלי לשליחת התרעה
+  MIN_URGENCY_SCORE = "2",         // ציון דחיפות מינימלי
 } = process.env;
 
 // ------- Guards -------
@@ -38,6 +52,10 @@ if (!APIFY_WEBHOOK_SECRET) {
 // ------- Globals -------
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+app.use(cors()); // הוספת CORS support
+
+// הגשת קבצים סטטיים
+app.use(express.static('public'));
 
 // טבלת “אירועים אחרונים” לזיהוי חפיפה של מילים בין כמה חשבונות
 // מבנה: { keywordLc: Map<keywordLc, Array<{account, text, url, ts, source}>> }
@@ -49,6 +67,12 @@ const sentIds = new Set();
 const KEYWORDS_LIST = KEYWORDS.split(",")
   .map(s => s.trim().toLowerCase())
   .filter(Boolean);
+
+const MARKET_KEYWORDS_LIST = MARKET_KEYWORDS.split(",")
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const ALL_KEYWORDS = [...KEYWORDS_LIST, ...MARKET_KEYWORDS_LIST];
 
 // הגדרות חלון / ספים
 const WINDOW_MS = Math.max(1, Number(WINDOW_SEC)) * 1000;
@@ -75,13 +99,18 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// מחלצים טקסט/לינק/חשבון מכל מבנה אפשרי (X/Truth/כללי)
+// מחלצים טקסט/לינק/חשבון מכל מבנה אפשרי (X/Truth/RSS/News API)
 function normalizeItem(raw = {}) {
+  const title = 
+    raw.title ||
+    "";
+
   const text =
     raw.text ||
     raw.content ||
     raw.full_text ||
-    raw.title ||
+    raw.description ||
+    raw.summary ||
     "";
 
   const url =
@@ -98,6 +127,8 @@ function normalizeItem(raw = {}) {
     raw.author ||
     raw.account ||
     raw.user ||
+    raw.publisher ||
+    raw.feedName ||
     "";
 
   const created =
@@ -105,18 +136,20 @@ function normalizeItem(raw = {}) {
     raw.createdAt ||
     raw.date ||
     raw.timestamp ||
+    raw.publishedAt ||
+    raw.pubDate ||
     "";
 
   // מזהה דדופ
-  const id = raw.id || raw.tweet_id || raw.tweetId || raw.postId || raw.uniqueId || url || (created + ":" + account + ":" + text.slice(0, 50));
+  const id = raw.id || raw.tweet_id || raw.tweetId || raw.postId || raw.uniqueId || raw.guid || url || (created + ":" + account + ":" + (title || text).slice(0, 50));
 
-  return { id, text, url, account, created };
+  return { id, title, text, url, account, created };
 }
 
 // מחפשים אילו מילות מפתח מופיעות בטקסט
-function extractMatchedKeywords(text = "") {
-  const lc = text.toLowerCase();
-  const hits = KEYWORDS_LIST.filter(k => lc.includes(k));
+function extractMatchedKeywords(text = "", title = "") {
+  const searchText = `${text} ${title}`.toLowerCase();
+  const hits = ALL_KEYWORDS.filter(k => searchText.includes(k));
   return uniq(hits);
 }
 
@@ -174,10 +207,23 @@ async function sendTelegram(html, extra = {}) {
   }
 }
 
-// דירוג השפעה עם Gemini (אופציונלי)
-async function getRiskScoring(text) {
-  if (RISK_SCORING !== "on") return "🔍 ניתוח כבוי (RISK_SCORING=off)";
-  if (!GEMINI_API_KEY) return "⚠️ חסר GEMINI_API_KEY";
+// מערכת ניתוח מתקדמת בהשראת Trumpet Labs
+async function getAdvancedAnalysis(text, source, account) {
+  if (RISK_SCORING !== "on") return {
+    impact: "🔍 ניתוח כבוי (RISK_SCORING=off)",
+    urgency: "N/A",
+    sentiment: "N/A",
+    tickers: [],
+    summary: "ניתוח כבוי"
+  };
+  
+  if (!GEMINI_API_KEY) return {
+    impact: "⚠️ חסר GEMINI_API_KEY",
+    urgency: "N/A", 
+    sentiment: "N/A",
+    tickers: [],
+    summary: "חסר מפתח API"
+  };
 
   try {
     const resp = await fetch(
@@ -191,14 +237,30 @@ async function getRiskScoring(text) {
               parts: [
                 {
                   text:
-`Analyze this financial/social post and rate its expected *short-term* market impact (S&P/major indices):
-"${text}"
+`Analyze this financial/market-related post from ${source} by @${account} and provide a comprehensive analysis:
 
-Return EXACTLY one of the following options (no extra text):
-❌ No Impact
-⚠️ Basic Impact
-🚨 High Impact
-`
+POST TEXT: "${text}"
+
+Please analyze and return a JSON object with the following structure (return ONLY valid JSON, no extra text):
+{
+  "impact_score": "1-5 scale where 5=highest market impact",
+  "impact_label": "one of: No Impact|Low Impact|Medium Impact|High Impact|Critical Impact",
+  "urgency_level": "1-5 scale where 5=most urgent",
+  "urgency_label": "one of: Low|Medium|High|Critical|Emergency", 
+  "sentiment": "one of: Very Negative|Negative|Neutral|Positive|Very Positive",
+  "confidence": "1-10 scale for analysis confidence",
+  "tickers": ["array of relevant stock symbols mentioned or implied"],
+  "sectors": ["array of relevant market sectors affected"],
+  "summary": "brief 1-2 sentence summary of market implications",
+  "reasoning": "brief explanation of the analysis"
+}
+
+Focus on:
+- Market moving potential (earnings, policy changes, trade, regulations)
+- Time sensitivity (breaking news vs regular updates)
+- Sentiment impact on markets
+- Specific companies/sectors mentioned or implied
+- Economic indicators and policy implications`
                 }
               ]
             }
@@ -206,39 +268,138 @@ Return EXACTLY one of the following options (no extra text):
         }),
       }
     );
+    
     const data = await resp.json();
-    const out = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!out) {
-      return "⚠️ Gemini: " + (data?.error?.message || "No result");
+    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    
+    if (!rawText) {
+      throw new Error(data?.error?.message || "No result from Gemini");
     }
-    // נוודא שזה אחד הערכים
-    if (["❌ No Impact", "⚠️ Basic Impact", "🚨 High Impact"].includes(out)) {
-      return out;
+
+    // ננסה לחלץ JSON מהתשובה
+    let analysis;
+    try {
+      // אם יש backticks או טקסט נוסף, ננסה לחלץ רק את ה-JSON
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      const jsonText = jsonMatch ? jsonMatch[0] : rawText;
+      analysis = JSON.parse(jsonText);
+    } catch (parseErr) {
+      // אם לא הצלחנו לפרסר, נחזיר ניתוח בסיסי
+      return {
+        impact: "⚠️ שגיאת פרסור",
+        urgency: "N/A",
+        sentiment: "N/A", 
+        tickers: [],
+        summary: rawText.substring(0, 100) + "..."
+      };
     }
-    return "⚠️ Gemini: " + out;
+
+    // נבנה תשובה מובנית
+    const impactEmoji = {
+      "No Impact": "❌", 
+      "Low Impact": "🔵",
+      "Medium Impact": "🟡", 
+      "High Impact": "🟠",
+      "Critical Impact": "🚨"
+    };
+
+    const urgencyEmoji = {
+      "Low": "🔽",
+      "Medium": "➡️", 
+      "High": "🔼",
+      "Critical": "⚠️",
+      "Emergency": "🚨"
+    };
+
+    const sentimentEmoji = {
+      "Very Negative": "📉📉",
+      "Negative": "📉", 
+      "Neutral": "➖",
+      "Positive": "📈",
+      "Very Positive": "📈📈"
+    };
+
+    return {
+      impact: `${impactEmoji[analysis.impact_label] || "❓"} ${analysis.impact_label} (${analysis.impact_score}/5)`,
+      urgency: `${urgencyEmoji[analysis.urgency_label] || "❓"} ${analysis.urgency_label} (${analysis.urgency_level}/5)`,
+      sentiment: `${sentimentEmoji[analysis.sentiment] || "❓"} ${analysis.sentiment}`,
+      confidence: `🎯 ${analysis.confidence}/10`,
+      tickers: analysis.tickers || [],
+      sectors: analysis.sectors || [],
+      summary: analysis.summary || "ללא סיכום",
+      reasoning: analysis.reasoning || "ללא הסבר",
+      raw_scores: {
+        impact: analysis.impact_score,
+        urgency: analysis.urgency_level,
+        confidence: analysis.confidence
+      }
+    };
+    
   } catch (err) {
-    return "⚠️ Gemini error: " + err.message;
+    return {
+      impact: "⚠️ Gemini error: " + err.message,
+      urgency: "N/A",
+      sentiment: "N/A",
+      tickers: [],
+      summary: "שגיאה בניתוח"
+    };
   }
 }
 
-// בונים הודעת טלגרם יפה
-async function buildTelegramMessage({ source, account, created, text, url, keyword }) {
-  const risk = await getRiskScoring(text);
-  const safeText = htmlEscape(text);
-  const srcIcon = source === "truth" ? "📣 Truth Social" : source === "twitter" ? "🐦 X" : "📰 Source";
+// בונים הודעת טלגרם מתקדמת בהשראת Trumpet Labs
+async function buildTelegramMessage({ source, account, created, text, url, keyword, title }) {
+  const contentForAnalysis = title ? `${title}\n${text || ''}` : text;
+  const analysis = await getAdvancedAnalysis(contentForAnalysis, source, account);
+  
+  const safeTitle = title ? htmlEscape(title) : "";
+  const safeText = htmlEscape(text || "");
+  
+  // איקונים לפי מקור
+  const srcIcon = {
+    "truth": "📣 Truth Social",
+    "twitter": "🐦 X", 
+    "news_polling": "📰 News Feed",
+    "rss": "📡 RSS",
+    "newsapi": "📰 NewsAPI",
+    "yahoo_finance": "💰 Yahoo Finance"
+  }[source] || "📰 News Source";
+
   const when = created ? `<i>${htmlEscape(created)}</i>\n` : "";
   const handle = account ? `<b>@${htmlEscape(account)}</b>\n` : "";
   const kw = keyword ? `<code>#${htmlEscape(keyword)}</code>\n` : "";
-  const link = url ? `<a href="${htmlEscape(url)}">Link</a>` : "";
+  const link = url ? `<a href="${htmlEscape(url)}">🔗 Link</a>` : "";
+
+  // כותרת אם יש
+  const titleText = safeTitle ? `<b>"${safeTitle}"</b>\n` : "";
+  const bodyText = safeText ? `${safeText}\n` : "";
+
+  // בניית רשימת טיקרים אם יש
+  const tickersText = analysis.tickers && analysis.tickers.length > 0 
+    ? `\n📊 <b>Tickers:</b> ${analysis.tickers.map(t => `$${t}`).join(', ')}`
+    : "";
+  
+  // בניית רשימת סקטורים אם יש  
+  const sectorsText = analysis.sectors && analysis.sectors.length > 0
+    ? `\n🏭 <b>Sectors:</b> ${analysis.sectors.join(', ')}`
+    : "";
 
   return (
-    `🔔 <b>Keyword cross-hit</b>\n` +
+    `🚨 <b>Market Alert - Multi-Source Detection</b>\n` +
     `${kw}${srcIcon}\n` +
     handle +
     when +
-    `${safeText}\n\n` +
-    `${link}\n\n` +
-    `Impact: ${risk}`
+    titleText +
+    bodyText +
+    `\n📈 <b>MARKET ANALYSIS:</b>\n` +
+    `• <b>Impact:</b> ${analysis.impact}\n` +
+    `• <b>Urgency:</b> ${analysis.urgency}\n` +
+    `• <b>Sentiment:</b> ${analysis.sentiment}\n` +
+    `• <b>Confidence:</b> ${analysis.confidence}\n` +
+    tickersText +
+    sectorsText +
+    `\n\n💡 <b>Summary:</b> ${htmlEscape(analysis.summary)}\n` +
+    `🧠 <b>Analysis:</b> ${htmlEscape(analysis.reasoning)}\n\n` +
+    `${link}`
   );
 }
 
@@ -258,16 +419,106 @@ async function maybeSendSummary(keywordLc) {
     text: latest.text,
     url: latest.url,
     keyword: keywordLc,
+    title: latest.title
   });
 
   await sendTelegram(msg);
 }
 
+// עיבוד ידיעות מכל המקורות (לא רק webhook)
+async function processNewsItems(newsItems, source = "news") {
+  if (!Array.isArray(newsItems) || newsItems.length === 0) return 0;
+
+  cleanupOldWindow();
+  let processed = 0;
+
+  for (const raw of newsItems) {
+    const it = normalizeItem(raw);
+    if (!it.text && !it.title) continue;
+
+    // דה-דופ
+    const hash = crypto
+      .createHash("md5")
+      .update(it.id || `${it.account}-${it.text}-${it.title}`)
+      .digest("hex");
+    if (sentIds.has(hash)) continue;
+
+    // התאמות מילות מפתח (כולל title)
+    const hits = extractMatchedKeywords(it.text, it.title);
+    if (hits.length === 0) continue;
+
+    // קבלת ניתוח מתקדם לפני שליחה
+    let shouldSend = false;
+    if (RISK_SCORING === "on" && GEMINI_API_KEY) {
+      const analysis = await getAdvancedAnalysis(it.text || it.title, source, it.account);
+      
+      // בדיקה האם עובר את הסף המינימלי
+      const impactScore = analysis.raw_scores?.impact || 1;
+      const urgencyScore = analysis.raw_scores?.urgency || 1;
+      
+      if (impactScore >= Number(MIN_IMPACT_SCORE) || urgencyScore >= Number(MIN_URGENCY_SCORE)) {
+        shouldSend = true;
+      }
+    } else {
+      shouldSend = true; // אם אין ניתוח, נשלח הכל
+    }
+
+    if (shouldSend) {
+      sentIds.add(hash);
+
+      // לכל מילת מפתח—נרשום אירוע
+      for (const kw of hits) {
+        const entry = {
+          account: it.account || "unknown",
+          text: it.text,
+          title: it.title,
+          url: it.url,
+          created: it.created,
+          ts: nowTs(),
+          source,
+        };
+        const crossed = registerAndCheck(kw, entry);
+        if (crossed) {
+          await maybeSendSummary(kw);
+        }
+      }
+      processed++;
+    }
+  }
+
+  return processed;
+}
+
+// פונקציה להתחלת איסוף חדשות תקופתי
+function startNewsCollection() {
+  if (ENABLE_POLLING !== "true") {
+    console.log("📰 News polling disabled (ENABLE_POLLING=false)");
+    return null;
+  }
+
+  const intervalMinutes = Number(POLLING_INTERVAL) || 5;
+  
+  const polling = startNewsPolling(intervalMinutes, async (newNews) => {
+    console.log(`📰 Processing ${newNews.length} new news items...`);
+    
+    // פילטור לפי מילות מפתח
+    const relevantNews = filterNewsByKeywords(newNews, ALL_KEYWORDS);
+    
+    if (relevantNews.length > 0) {
+      const processed = await processNewsItems(relevantNews, "news_polling");
+      console.log(`✅ Processed ${processed} relevant news items`);
+    }
+  });
+
+  console.log(`📡 Started news collection with ${intervalMinutes} min intervals`);
+  return polling;
+}
+
 // ------- Web server routes -------
 
-// דף בית קצר
-app.get("/", (req, res) => {
-  res.type("text/plain").send("OK - Alert bot is running.\nSee /health, /debug");
+// דף בית - הפניה לממשק הויזואלי או מידע API
+app.get("/api", (req, res) => {
+  res.type("text/plain").send("Advanced News Analyzer API - Inspired by Trumpet Labs\n\nEndpoints:\n/health - System status\n/debug - Configuration\n/test/telegram - Test telegram\n/collect/news - Manual news collection\n/analyze/text - Analyze specific text\n\nVisual Interface: /");
 });
 
 // בריאות
@@ -285,13 +536,22 @@ app.get("/health", (req, res) => {
 app.get("/debug", (req, res) => {
   res.json({
     ok: true,
+    version: "2.0.0 - Advanced News Analyzer",
     env: {
       TELEGRAM_BOT_TOKEN: TELEGRAM_BOT_TOKEN ? "set" : "missing",
       TELEGRAM_CHAT_ID: TELEGRAM_CHAT_ID ? "set" : "missing",
       RISK_SCORING,
       GEMINI_API_KEY: GEMINI_API_KEY ? "set" : "missing",
+      NEWS_API_KEY: NEWS_API_KEY ? "set" : "missing",
       APIFY_WEBHOOK_SECRET: APIFY_WEBHOOK_SECRET ? "set" : "missing",
-      KEYWORDS: KEYWORDS_LIST,
+      ENABLE_RSS,
+      ENABLE_POLLING,
+      POLLING_INTERVAL: Number(POLLING_INTERVAL),
+      MIN_IMPACT_SCORE: Number(MIN_IMPACT_SCORE),
+      MIN_URGENCY_SCORE: Number(MIN_URGENCY_SCORE),
+      PRIMARY_KEYWORDS: KEYWORDS_LIST,
+      MARKET_KEYWORDS: MARKET_KEYWORDS_LIST,
+      TOTAL_KEYWORDS: ALL_KEYWORDS.length,
       WINDOW_SEC: Number(WINDOW_SEC),
       MIN_UNIQUE_ACCOUNTS: MIN_ACCOUNTS,
     },
@@ -299,15 +559,111 @@ app.get("/debug", (req, res) => {
       recentByKeywordSize: recentByKeyword.size,
       sentIdsSize: sentIds.size,
     },
+    features: {
+      multiSourceCollection: true,
+      advancedAnalysis: RISK_SCORING === "on" && !!GEMINI_API_KEY,
+      rssFeeds: ENABLE_RSS === "true",
+      newsPolling: ENABLE_POLLING === "true",
+      impactFiltering: true,
+      tickerDetection: true,
+      sentimentAnalysis: true
+    },
     now: new Date().toISOString(),
   });
 });
 
 // בדיקת טלגרם ידנית
 app.get("/test/telegram", async (req, res) => {
-  const text = req.query.text || "בדיקת בוט ✅";
+  const text = req.query.text || "בדיקת בוט מתקדם ✅";
   const r = await sendTelegram(`Test: ${htmlEscape(text)}\n\nTime: ${new Date().toISOString()}`);
   res.json({ ok: true, result: r || null });
+});
+
+// איסוף חדשות ידני
+app.get("/collect/news", async (req, res) => {
+  try {
+    console.log("🔄 Manual news collection triggered...");
+    const news = await collectNewsFromAllSources({
+      newsApiKey: NEWS_API_KEY,
+      includeRSS: ENABLE_RSS === "true",
+      includeNewsAPI: !!NEWS_API_KEY,
+      includeYahoo: true,
+      maxItemsPerSource: 20
+    });
+
+    const relevantNews = filterNewsByKeywords(news, ALL_KEYWORDS);
+    const processed = await processNewsItems(relevantNews, "manual_collection");
+
+    res.json({
+      ok: true,
+      total_collected: news.length,
+      relevant_items: relevantNews.length,
+      processed_items: processed,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Manual collection error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// ניתוח טקסט ספציפי
+app.post("/analyze/text", async (req, res) => {
+  try {
+    const { text, source = "manual", account = "user" } = req.body;
+    
+    if (!text) {
+      return res.status(400).json({ ok: false, error: "Missing text parameter" });
+    }
+
+    const analysis = await getAdvancedAnalysis(text, source, account);
+    const keywords = extractMatchedKeywords(text);
+
+    res.json({
+      ok: true,
+      input: { text, source, account },
+      analysis,
+      matched_keywords: keywords,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Text analysis error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// GET version של ניתוח טקסט
+app.get("/analyze/text", async (req, res) => {
+  try {
+    const { text, source = "manual", account = "user" } = req.query;
+    
+    if (!text) {
+      return res.status(400).json({ ok: false, error: "Missing text parameter" });
+    }
+
+    const analysis = await getAdvancedAnalysis(text, source, account);
+    const keywords = extractMatchedKeywords(text);
+
+    res.json({
+      ok: true,
+      input: { text, source, account },
+      analysis,
+      matched_keywords: keywords,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Text analysis error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
 });
 
 // נקודת Webhook לאפיפיי / משימות אחרות
@@ -384,6 +740,36 @@ app.post("/apify/webhook", async (req, res) => {
 });
 
 // ------- Start -------
+
+// משתנה גלובלי לשמירת הפולינג
+let newsPollingInstance = null;
+
 app.listen(PORT, () => {
-  console.log(`🚀 Webhook bot running on :${PORT}`);
+  console.log(`🚀 Advanced News Analyzer running on :${PORT}`);
+  console.log(`📊 Analysis Mode: ${RISK_SCORING === "on" ? "ENABLED" : "DISABLED"}`);
+  console.log(`🔑 Keywords: ${ALL_KEYWORDS.length} total`);
+  console.log(`📡 RSS Collection: ${ENABLE_RSS === "true" ? "ENABLED" : "DISABLED"}`);
+  console.log(`⏱️ Polling: ${ENABLE_POLLING === "true" ? `ENABLED (${POLLING_INTERVAL} min)` : "DISABLED"}`);
+  
+  // הפעלת איסוף חדשות תקופתי
+  if (ENABLE_POLLING === "true") {
+    newsPollingInstance = startNewsCollection();
+  }
+});
+
+// טיפול בסגירה נקייה
+process.on('SIGTERM', () => {
+  console.log('📴 Shutting down gracefully...');
+  if (newsPollingInstance) {
+    newsPollingInstance.stop();
+  }
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('📴 Shutting down gracefully...');
+  if (newsPollingInstance) {
+    newsPollingInstance.stop();
+  }
+  process.exit(0);
 });

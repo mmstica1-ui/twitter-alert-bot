@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced News Analyzer - מנתח חדשות מתקדם</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        
+        .stat-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .stat-label {
+            font-size: 1rem;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .stat-description {
+            font-size: 0.9rem;
+            color: #999;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        
+        .feature-card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+        
+        .feature-title {
+            font-size: 1.3rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .feature-description {
+            color: #666;
+            line-height: 1.5;
+        }
+        
+        .analyzer-section {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        
+        .analyzer-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .input-group {
+            margin-bottom: 20px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #555;
+        }
+        
+        .input-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 1rem;
+            resize: vertical;
+            min-height: 100px;
+            font-family: inherit;
+        }
+        
+        .input-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .analyze-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+        
+        .analyze-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .analyze-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .result-section {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .result-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .result-item {
+            margin-bottom: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .result-label {
+            font-weight: 500;
+            color: #555;
+            margin-left: 10px;
+        }
+        
+        .keywords-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        
+        .keyword-tag {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #667eea;
+            font-style: italic;
+        }
+        
+        .error {
+            color: #dc3545;
+            background: #f8d7da;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #dc3545;
+        }
+        
+        .api-endpoints {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        
+        .api-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .endpoint-item {
+            margin-bottom: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .endpoint-method {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        
+        .endpoint-url {
+            font-family: 'Courier New', monospace;
+            color: #333;
+            margin-right: 10px;
+        }
+        
+        .endpoint-description {
+            color: #666;
+            margin-top: 5px;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚨📈 Advanced News Analyzer</h1>
+            <p>מערכת ניתוח חדשות מתקדמת בהשראת Trumpet Labs</p>
+        </div>
+        
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-number" id="totalKeywords">-</div>
+                <div class="stat-label">מילות מפתח</div>
+                <div class="stat-description">מילים רלוונטיות לשוק</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="systemStatus">-</div>
+                <div class="stat-label">סטטוס מערכת</div>
+                <div class="stat-description">מצב תפעולי</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="analysisMode">-</div>
+                <div class="stat-label">מצב ניתוח</div>
+                <div class="stat-description">AI מתקדם</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="pollingStatus">-</div>
+                <div class="stat-label">איסוף תקופתי</div>
+                <div class="stat-description">בדיקת חדשות</div>
+            </div>
+        </div>
+        
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">🧠</div>
+                <div class="feature-title">ניתוח AI מתקדם</div>
+                <div class="feature-description">
+                    דירוג השפעה ודחיפות, ניתוח סנטימנט, זיהוי טיקרים וסקטורים מושפעים באמצעות Gemini AI
+                </div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📰</div>
+                <div class="feature-title">מקורות מגוונים</div>
+                <div class="feature-description">
+                    איסוף מ-RSS feeds, NewsAPI, Yahoo Finance, Twitter/X ו-Truth Social עם סינון חכם
+                </div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🎯</div>
+                <div class="feature-title">פילטור חכם</div>
+                <div class="feature-description">
+                    זיהוי חדשות רלוונטיות לשוק, הסרת כפילויות וצבירת אירועים מרובי מקורות
+                </div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <div class="feature-title">זמן אמת</div>
+                <div class="feature-description">
+                    התרעות מיידיות לטלגרם עם ניתוח מפורט וציונים לקבלת החלטות מהירות
+                </div>
+            </div>
+        </div>
+        
+        <div class="analyzer-section">
+            <div class="analyzer-title">🔍 נתח טקסט</div>
+            <div class="input-group">
+                <label for="textInput">הכנס טקסט לניתוח:</label>
+                <textarea id="textInput" placeholder="לדוגמה: Fed announces interest rate cut of 0.5% amid inflation concerns"></textarea>
+            </div>
+            <button class="analyze-btn" onclick="analyzeText()">🚀 נתח טקסט</button>
+            <div id="analysisResult"></div>
+        </div>
+        
+        <div class="api-endpoints">
+            <div class="api-title">🔗 API Endpoints</div>
+            <div class="endpoint-item">
+                <span class="endpoint-method">GET</span>
+                <span class="endpoint-url">/health</span>
+                <div class="endpoint-description">בדיקת מצב המערכת</div>
+            </div>
+            <div class="endpoint-item">
+                <span class="endpoint-method">GET</span>
+                <span class="endpoint-url">/debug</span>
+                <div class="endpoint-description">מידע מפורט על תצורה ותכונות</div>
+            </div>
+            <div class="endpoint-item">
+                <span class="endpoint-method">GET</span>
+                <span class="endpoint-url">/collect/news</span>
+                <div class="endpoint-description">איסוף ידני של חדשות מכל המקורות</div>
+            </div>
+            <div class="endpoint-item">
+                <span class="endpoint-method">POST</span>
+                <span class="endpoint-url">/analyze/text</span>
+                <div class="endpoint-description">ניתוח טקסט עם AI מתקדם</div>
+            </div>
+            <div class="endpoint-item">
+                <span class="endpoint-method">POST</span>
+                <span class="endpoint-url">/apify/webhook?secret=YOUR_SECRET</span>
+                <div class="endpoint-description">Webhook לקבלת חדשות מרשתות חברתיות</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadSystemStats() {
+            try {
+                const response = await fetch('/debug');
+                const data = await response.json();
+                
+                document.getElementById('totalKeywords').textContent = data.env.TOTAL_KEYWORDS || 0;
+                document.getElementById('systemStatus').textContent = data.ok ? '✅' : '❌';
+                document.getElementById('analysisMode').textContent = data.features.advancedAnalysis ? '🧠 ON' : '🔍 OFF';
+                document.getElementById('pollingStatus').textContent = data.features.newsPolling ? '⏱️ ON' : '⏸️ OFF';
+            } catch (error) {
+                console.error('Failed to load system stats:', error);
+                document.getElementById('systemStatus').textContent = '❌';
+            }
+        }
+        
+        async function analyzeText() {
+            const textInput = document.getElementById('textInput');
+            const resultDiv = document.getElementById('analysisResult');
+            const button = document.querySelector('.analyze-btn');
+            
+            const text = textInput.value.trim();
+            if (!text) {
+                alert('אנא הכנס טקסט לניתוח');
+                return;
+            }
+            
+            button.disabled = true;
+            button.textContent = '🔄 מנתח...';
+            
+            resultDiv.innerHTML = '<div class="loading">🔄 מבצע ניתוח מתקדם...</div>';
+            
+            try {
+                const response = await fetch('/analyze/text', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ text, source: 'web_interface', account: 'user' })
+                });
+                
+                const data = await response.json();
+                
+                if (data.ok) {
+                    displayAnalysisResult(data);
+                } else {
+                    resultDiv.innerHTML = `<div class="error">❌ שגיאה: ${data.error}</div>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">❌ שגיאת רשת: ${error.message}</div>`;
+            } finally {
+                button.disabled = false;
+                button.textContent = '🚀 נתח טקסט';
+            }
+        }
+        
+        function displayAnalysisResult(data) {
+            const resultDiv = document.getElementById('analysisResult');
+            const analysis = data.analysis;
+            const keywords = data.matched_keywords;
+            
+            let keywordsHtml = '';
+            if (keywords && keywords.length > 0) {
+                keywordsHtml = `
+                    <div class="result-item">
+                        <strong>🔑 מילות מפתח שזוהו:</strong>
+                        <div class="keywords-list">
+                            ${keywords.map(k => `<span class="keyword-tag">${k}</span>`).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            const tickersHtml = analysis.tickers && analysis.tickers.length > 0 ? 
+                `<div class="result-item"><strong>📊 טיקרים:</strong> <span class="result-label">${analysis.tickers.map(t => '$' + t).join(', ')}</span></div>` : '';
+            
+            const sectorsHtml = analysis.sectors && analysis.sectors.length > 0 ? 
+                `<div class="result-item"><strong>🏭 סקטורים:</strong> <span class="result-label">${analysis.sectors.join(', ')}</span></div>` : '';
+            
+            resultDiv.innerHTML = `
+                <div class="result-section">
+                    <div class="result-title">📊 תוצאות הניתוח</div>
+                    <div class="result-item">
+                        <strong>💥 השפעה:</strong> <span class="result-label">${analysis.impact}</span>
+                    </div>
+                    <div class="result-item">
+                        <strong>⚡ דחיפות:</strong> <span class="result-label">${analysis.urgency}</span>
+                    </div>
+                    <div class="result-item">
+                        <strong>💭 סנטימנט:</strong> <span class="result-label">${analysis.sentiment}</span>
+                    </div>
+                    <div class="result-item">
+                        <strong>🎯 רמת ביטחון:</strong> <span class="result-label">${analysis.confidence}</span>
+                    </div>
+                    ${tickersHtml}
+                    ${sectorsHtml}
+                    ${keywordsHtml}
+                    <div class="result-item">
+                        <strong>💡 סיכום:</strong> <span class="result-label">${analysis.summary}</span>
+                    </div>
+                    <div class="result-item">
+                        <strong>🧠 נימוק:</strong> <span class="result-label">${analysis.reasoning}</span>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // טען נתוני מערכת בטעינת הדף
+        window.addEventListener('load', loadSystemStats);
+        
+        // אפשר שליחה עם Enter
+        document.getElementById('textInput').addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.key === 'Enter') {
+                analyzeText();
+            }
+        });
+    </script>
+</body>
+</html>
