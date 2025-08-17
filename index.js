@@ -626,14 +626,6 @@ app.post("/trade", async (req, res) => {
       `🔗 Connect IBKR Gateway for live execution`
     ].filter(Boolean).join("\n");
     
-    // שליחת הודעת מסחר (עם fallback)
-    try {
-      await tgSendWithTradeButtons(msg, tradeRecord);
-    } catch (error) {
-      console.log("⚠️ Trade button message failed, sending regular message:", error.message);
-      await tgSend(msg);
-    }
-
     // שמירת רשומת המסחר
     const tradeRecord = {
       id: Date.now().toString(),
@@ -645,6 +637,14 @@ app.post("/trade", async (req, res) => {
       status: "preview",
       mode: "manual"
     };
+
+    // שליחת הודעת מסחר (עם fallback)
+    try {
+      await tgSendWithTradeButtons(msg, tradeRecord);
+    } catch (error) {
+      console.log("⚠️ Trade button message failed, sending regular message:", error.message);
+      await tgSend(msg);
+    }
 
     console.log(`💰 Trade preview: ${side} ${symbol} ${suggestedStrike} ${finalExpiry.dte} - $${budgetUsd}`);
 
