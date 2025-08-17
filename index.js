@@ -533,8 +533,13 @@ app.post("/web/alert", async (req, res) => {
     alertHistory.unshift(alertData);
     if (alertHistory.length > 100) alertHistory.pop(); // שמירת 100 ידיעות אחרונות
 
-    // שליחת הודעה עם כפתורי מסחר
-    await tgSendWithButtons(html, alertData.id);
+    // שליחת הודעה (מתחילים עם גרסה פשוטה)
+    try {
+      await tgSendWithButtons(html, alertData.id);
+    } catch (error) {
+      console.log("⚠️ Button message failed, sending regular message:", error.message);
+      await tgSend(html);
+    }
 
     console.log(`📰 Alert processed: ${title} from @${handle} - Cross-match: ${crossMatch}`);
 
