@@ -626,7 +626,13 @@ app.post("/trade", async (req, res) => {
       `🔗 Connect IBKR Gateway for live execution`
     ].filter(Boolean).join("\n");
     
-    await tgSendWithTradeButtons(msg, tradeRecord);
+    // שליחת הודעת מסחר (עם fallback)
+    try {
+      await tgSendWithTradeButtons(msg, tradeRecord);
+    } catch (error) {
+      console.log("⚠️ Trade button message failed, sending regular message:", error.message);
+      await tgSend(msg);
+    }
 
     // שמירת רשומת המסחר
     const tradeRecord = {
