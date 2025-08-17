@@ -157,13 +157,30 @@ function extractKeywords(text) {
 // ===== SPX Options Calculator =====
 async function getCurrentSPXPrice() {
   try {
-    // בשלב זה נחזיר מחיר סימולטור - בעתיד נחבר לדאטה אמיתית
-    // אפשר להשתמש ב-Yahoo Finance API או Alpha Vantage
-    const mockPrice = 5500 + (Math.random() * 100 - 50); // סימולציה של מחיר SPX
-    return Number(mockPrice.toFixed(2));
+    // Try to get real SPX price from Yahoo Finance
+    const response = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/%5ESPX', {
+      timeout: 5000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    const data = response.data;
+    if (data?.chart?.result?.[0]?.meta?.regularMarketPrice) {
+      const price = data.chart.result[0].meta.regularMarketPrice;
+      console.log(`📊 Real SPX price: $${price}`);
+      return Number(price.toFixed(2));
+    }
+    
+    throw new Error('No price data in response');
   } catch (e) {
-    console.error("Error getting SPX price:", e.message);
-    return 5500; // fallback price
+    console.error("Error getting real SPX price:", e.message);
+    console.log("📉 Falling back to simulated price");
+    
+    // Fallback to simulated price with more realistic movement
+    const basePrice = 5500;
+    const mockPrice = basePrice + (Math.random() * 100 - 50);
+    return Number(mockPrice.toFixed(2));
   }
 }
 
