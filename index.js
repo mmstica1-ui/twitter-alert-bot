@@ -514,9 +514,6 @@ app.post("/web/alert", async (req, res) => {
       `<i>⚠️ Analysis for informational purposes only</i>`,
     ].filter(Boolean).join("\n");
 
-    // שליחת הודעה עם כפתורי מסחר
-    await tgSendWithButtons(html, alertData.id);
-
     // שמירה בהיסטוריה
     const alertData = {
       id: Date.now().toString(),
@@ -535,6 +532,9 @@ app.post("/web/alert", async (req, res) => {
     
     alertHistory.unshift(alertData);
     if (alertHistory.length > 100) alertHistory.pop(); // שמירת 100 ידיעות אחרונות
+
+    // שליחת הודעה עם כפתורי מסחר
+    await tgSendWithButtons(html, alertData.id);
 
     console.log(`📰 Alert processed: ${title} from @${handle} - Cross-match: ${crossMatch}`);
 
