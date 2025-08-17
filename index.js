@@ -865,6 +865,11 @@ app.get("/spx/strikes", async (req, res) => {
 // 7) בדיקת מהימנות חדשה
 app.post("/verify/news", async (req, res) => {
   try {
+    const token = req.headers["x-auth-token"];
+    if (!token || token !== APIFY_WEBHOOK_SECRET) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
     const { text, source, url } = req.body;
     
     if (!text) {
