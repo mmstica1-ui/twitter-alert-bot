@@ -148,3 +148,4 @@ docker run -p 8080:8080 --env-file .env news-analyzer
 ## 📞 תמיכה
 
 למידע נוסף או תמיכה טכנית, בדוק את הלוגים או השתמש ב-`/debug` endpoint.
+# Force Railway redeploy for Telegram bot token fix
